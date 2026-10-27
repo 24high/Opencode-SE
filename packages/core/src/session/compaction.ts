@@ -18,12 +18,17 @@ import type { StreamOptions } from "@opencode/ai/route"
 import type { SessionCompactionResult } from "@opencode/plugin/effect/session"
 import type { SessionError } from "@opencode/schema/session-error"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
+import { httpClient } from "@opencode/util/effect/app-node-platform"
 import { Context, Effect, Layer, Result, Stream } from "effect"
+import { HttpClient } from "effect/http"
 import { Agent } from "../agent.js"
 import { Bus } from "../bus.js"
+import { Config } from "../config.js"
+import { Credential } from "../credential.js"
 import { Database } from "../database/database.js"
 import { llmClient } from "../effect/app-node-platform.js"
 import { Model } from "../model.js"
+import { QwenClient } from "../qwen/client.js"
 import { State } from "../state.js"
 import { Token } from "../util/token.js"
 import type { SessionContext } from "./context.js"
@@ -44,15 +49,35 @@ export type Settings = {
   buffer?: number
   /** Tokens of recent conversation kept verbatim beside the summary. */
   keep: number
+  early: {
+    enabled: boolean
+    /** Estimated context tokens required before an early compaction is considered. */
+    minTokens: number
+    /** Estimated tokens the compaction must remove for it to be worthwhile. */
+    minBenefitTokens: number
+    /** Milliseconds between consecutive early compactions of one session. */
+    cooldownMs: number
+    /** Only compact at task boundaries (fresh user input or a completed step). */
+    requireTaskBoundary: boolean
+    /** Summarize through the configured local Qwen endpoint instead of the session model. */
+    localSummarize: boolean
+  }
 }
 
 export type Editor = {
-  configure: (settings: Partial<Settings>) => void
+  configure: (settings: {
+    auto?: boolean
+    buffer?: number
+    keep?: number
+    early?: Partial<Settings["early"]>
+  }) => void
 }
 
 export type Trigger =
   /** `overflow`: the provider just rejected this context as too long. */
   | { readonly reason: "auto" | "overflow"; readonly context: SessionContext.Loaded }
+  /** `early`: cost-aware compaction below the context limit. Skipped unless worthwhile. */
+  | { readonly reason: "early"; readonly context: SessionContext.Loaded }
   /** `inputID` is the `/compact` inbox item, whose message shows the outcome. */
   | { readonly reason: "manual"; readonly context: SessionContext.Loaded; readonly inputID: SessionMessage.ID }
 
@@ -100,6 +125,12 @@ const UNKNOWN_WINDOW = 200_000
 const TOOL_OUTPUT_MAX_CHARS = 1_250
 const IMAGE_TOKEN_ESTIMATE = 1_500
 const PDF_TOKEN_ESTIMATE = 2_000
+/** Wrapper tags and whitespace around a checkpoint's summary and recent text. */
+const CHECKPOINT_OVERHEAD = 64
+/** The largest recent slice of the summarized conversation sent to the local model. */
+const LOCAL_SUMMARY_MAX_CHARS = 48_000
+const LOCAL_SUMMARY_SYSTEM =
+  "You summarize a conversation into a structured summary that another agent uses to resume the work. Return only the structured summary in the requested format. Do not continue the task or call tools."
 
 const SUMMARY_TEMPLATE = `You MUST use this format for your response (you may omit sections that aren't applicable). Do not include the <template> tags in your response.
 <template>
@@ -186,25 +217,48 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const agents = yield* Agent.Service
     const bus = yield* Bus.Service
+    const http = yield* HttpClient.HttpClient
     const llm = yield* LLMClient.Service
     const catalog = yield* Model.Service
     const models = yield* SessionRunnerModel.Service
     const db = (yield* Database.Service).db
     const requests = yield* SessionModelRequest.Service
+    const config = yield* Config.Service
+    const credentials = yield* Credential.Service
 
     const state = State.create<Settings, Editor>({
       name: "session-compaction",
-      initial: () => ({ auto: true, keep: 15_000 }),
+      initial: () => ({
+        auto: true,
+        keep: 15_000,
+        early: {
+          enabled: false,
+          minTokens: 24_000,
+          minBenefitTokens: 8_000,
+          cooldownMs: 300_000,
+          requireTaskBoundary: true,
+          localSummarize: false,
+        },
+      }),
       editor: (settings) => ({
         configure: (update) => {
-          Object.assign(settings, update)
+          if (update.early) Object.assign(settings.early, update.early)
+          Object.assign(settings, {
+            ...(update.auto === undefined ? {} : { auto: update.auto }),
+            ...(update.buffer === undefined ? {} : { buffer: update.buffer }),
+            ...(update.keep === undefined ? {} : { keep: update.keep }),
+          })
         },
       }),
     })
 
+    const lastEarly = new Map<SessionContext.Loaded["session"]["id"], number>()
+
     const compact = Effect.fn("SessionCompaction.compact")(function* (trigger: Trigger): Effect.fn.Return<Outcome> {
       const settings = state.get()
       const context = trigger.context
+
+      if (trigger.reason === "early") return yield* compactEarly(trigger)
 
       // Only the user compacts when automatic compaction is off, overflow included.
       if (trigger.reason !== "manual" && !settings.auto) return { status: "skipped" }
@@ -237,6 +291,139 @@ export const layer = Layer.effect(
           onFailure: (failure) => publish(selected, failure),
         }),
       )
+    })
+
+    const compactEarly = Effect.fnUntraced(function* (trigger: Trigger & { reason: "early" }) {
+      const settings = state.get().early
+      if (!settings.enabled) return { status: "skipped" as const }
+      const context = trigger.context
+      const sessionID = context.session.id
+      const messages = context.messages
+
+      // A compaction just completed; let the runner rebuild the request first.
+      if (messages.at(-1)?.type === "compaction") return { status: "skipped" as const }
+
+      // Hysteresis: one early compaction per cooldown window.
+      const last = lastEarly.get(sessionID)
+      if (last !== undefined && Date.now() - last < settings.cooldownMs) return { status: "skipped" as const }
+
+      // Thresholds: only compact when the context is large enough and the
+      // removable prefix alone justifies the cost of summarizing it.
+      const before = estimateContext(context)
+      if (before < settings.minTokens) return { status: "skipped" as const }
+      const split = splitConversation(messages, state.get().keep)
+      if (!split) return { status: "skipped" as const }
+      const removable = split.older.reduce((sum, message) => sum + Token.estimate(messageToText(message)), 0)
+      if (removable < settings.minBenefitTokens) return { status: "skipped" as const }
+
+      // Prefer natural task boundaries unless explicitly relaxed.
+      if (settings.requireTaskBoundary) {
+        const tail = messages.at(-1)
+        const boundary = tail?.type === "user" || (tail?.type === "assistant" && tail.finish === "stop")
+        if (!boundary) return { status: "skipped" as const }
+      }
+
+      // A native window cannot be summarized locally; keep the early path to local summaries.
+      const ceiling = calculateCeiling(context.model.limit, state.get().buffer)
+      const budget = Number.isFinite(ceiling)
+        ? ceiling
+        : calculateCeiling({ ...context.model.limit, context: UNKNOWN_WINDOW }, state.get().buffer)
+
+      // Local summarization records the local model's identity, usage, and cost,
+      // never the session model's. Without a resolvable local model the early
+      // path skips; the context-limit compaction remains the safety net.
+      const local = settings.localSummarize ? yield* resolveLocalModel(context.session) : undefined
+      if (settings.localSummarize && local === undefined) return { status: "skipped" as const }
+      const selected = local === undefined ? trigger : { ...trigger, context: { ...context, model: local } }
+
+      const outcome = yield* (settings.localSummarize
+        ? summarizeLocally(selected, split)
+        : summarize(selected, budget, state.get().keep)).pipe(
+        Effect.matchEffect({
+          onSuccess: (result) =>
+            Effect.gen(function* () {
+              const after = Token.estimate(split.recent) + Token.estimate(result.text) + CHECKPOINT_OVERHEAD
+              lastEarly.set(sessionID, Date.now())
+              const published = yield* publish(selected, {
+                ...result,
+                metadata: { early: true, before, after, removed: Math.max(0, before - after) },
+              })
+              if (published.status === "completed")
+                yield* bus.publish(SessionEvent.Synthetic, {
+                  sessionID,
+                  text: `Early compaction: ~${before} → ~${after} context tokens (estimates), ~${Math.max(0, before - after)} removed. Triggered below the context limit to prune obsolete context.`,
+                })
+              return published
+            }),
+          onFailure: () => Effect.succeed({ status: "skipped" as const }),
+        }),
+      )
+      return outcome
+    })
+
+    /** Resolves the configured local Qwen model as a routed catalog model. */
+    const resolveLocalModel = (
+      session: SessionContext.Loaded["session"],
+    ): Effect.Effect<SessionRunnerModel.Resolved | undefined, never, never> =>
+      Effect.gen(function* () {
+        const qwen = yield* QwenClient.loadSettings(config, credentials)
+        if (!qwen || qwen.provider === undefined) return
+        const ref = Model.Ref.parse(`${qwen.provider}/${qwen.model}`)
+        return yield* models
+          .resolve({ ...session, model: ref }, catalog.available)
+          .pipe(Effect.orElseSucceed(() => undefined))
+      })
+
+    const summarizeLocally = Effect.fnUntraced(function* (
+      trigger: Trigger & { reason: "early" },
+      split: NonNullable<ReturnType<typeof splitConversation>>,
+    ): Effect.fn.Return<Result, Failure> {
+      const context = trigger.context
+      const qwen = yield* QwenClient.loadSettings(config, credentials)
+      if (!qwen) return yield* Effect.fail(NOTHING_TO_COMPACT)
+
+      const prompt = buildPrompt(false)
+      const older = split.older
+        .map((message) => messageToText(message))
+        .filter((text) => text.length > 0)
+        .join("\n\n")
+      const response = yield* QwenClient.chat({
+        http,
+        config: qwen,
+        request: {
+          system: LOCAL_SUMMARY_SYSTEM,
+          user: `${prompt}\n\n<conversation>\n${older.slice(-LOCAL_SUMMARY_MAX_CHARS)}\n</conversation>`,
+        },
+      }).pipe(
+        Effect.mapError(
+          (error): Failure => ({
+            error: {
+              type: "compaction.failed",
+              message: `Local Qwen summarization failed: ${error.message}`,
+            },
+          }),
+        ),
+      )
+      const headings = SUMMARY_TEMPLATE.split("\n").filter((line) => line.startsWith("##"))
+      const filled = response.content.split("\n").some((line: string) => headings.includes(line.trim()))
+      if (!filled)
+        return yield* Effect.fail<Failure>({
+          error: { type: "compaction.failed", message: "Local summary did not match the required template" },
+        })
+      const tokens = {
+        input: response.usage.input ?? 0,
+        output: response.usage.output ?? 0,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      }
+      // `trigger.context.model` is the resolved local model here, so usage and
+      // cost are recorded against the local model identity.
+      yield* spend(context.session.id, { tokens, cost: SessionUsage.calculateCost(context.model.cost, tokens) })
+      return {
+        text: response.content,
+        recent: split.recent,
+        metadata: { local: true },
+      }
     })
 
     const due = (context: SessionContext.Loaded, ceiling: number) => {
@@ -683,7 +870,18 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Agent.node, Bus.node, Database.node, llmClient, Model.node, SessionModelRequest.node, SessionRunnerModel.node],
+  deps: [
+    Agent.node,
+    Bus.node,
+    Config.node,
+    Credential.node,
+    Database.node,
+    httpClient,
+    llmClient,
+    Model.node,
+    SessionModelRequest.node,
+    SessionRunnerModel.node,
+  ],
 })
 
 /** History loads from the latest completed compaction, so a previous one is always the first message. */

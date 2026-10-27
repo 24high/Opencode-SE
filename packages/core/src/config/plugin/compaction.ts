@@ -19,6 +19,30 @@ export const Plugin = define({
           ...(entry.info.compaction.auto === undefined ? {} : { auto: entry.info.compaction.auto }),
           ...(entry.info.compaction.buffer === undefined ? {} : { buffer: entry.info.compaction.buffer }),
           ...(entry.info.compaction.keep?.tokens === undefined ? {} : { keep: entry.info.compaction.keep.tokens }),
+          ...(entry.info.compaction.early === undefined
+            ? {}
+            : {
+                early: {
+                  ...(entry.info.compaction.early.enabled === undefined
+                    ? {}
+                    : { enabled: entry.info.compaction.early.enabled }),
+                  ...(entry.info.compaction.early.min_tokens === undefined
+                    ? {}
+                    : { minTokens: entry.info.compaction.early.min_tokens }),
+                  ...(entry.info.compaction.early.min_benefit_tokens === undefined
+                    ? {}
+                    : { minBenefitTokens: entry.info.compaction.early.min_benefit_tokens }),
+                  ...(entry.info.compaction.early.cooldown_seconds === undefined
+                    ? {}
+                    : { cooldownMs: entry.info.compaction.early.cooldown_seconds * 1000 }),
+                  ...(entry.info.compaction.early.require_task_boundary === undefined
+                    ? {}
+                    : { requireTaskBoundary: entry.info.compaction.early.require_task_boundary }),
+                  ...(entry.info.compaction.early.local_summarize === undefined
+                    ? {}
+                    : { localSummarize: entry.info.compaction.early.local_summarize }),
+                },
+              }),
         })
       }
     })

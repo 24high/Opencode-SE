@@ -14,6 +14,8 @@ import { Location } from "../location.js"
 import { McpInstructions } from "../mcp/instructions.js"
 import { McpTool } from "../tool/mcp.js"
 import { ReferenceInstructions } from "../reference/instructions.js"
+import { Routing } from "../routing/service.js"
+import { RoutingInstructions } from "../routing/instructions.js"
 import { SkillInstructions } from "../skill/instructions.js"
 import { Tool } from "../tool.js"
 import { AgentNotFoundError } from "./error.js"
@@ -86,6 +88,7 @@ const layer = Layer.effect(
     const models = yield* SessionRunnerModel.Service
     const request = yield* SessionModelRequest.Service
     const referenceInstructions = yield* ReferenceInstructions.Service
+    const routing = yield* Routing.Service
     const skillInstructions = yield* SkillInstructions.Service
     const store = yield* SessionStore.Service
     const registry = yield* Tool.Service
@@ -155,6 +158,8 @@ const layer = Layer.effect(
           loaded.discovery,
           loaded.builtins,
           loaded.entries,
+          // The routing orchestrator guidance is static and only present when routing is enabled.
+          ...((yield* routing.enabled(session)) ? [RoutingInstructions.make()] : []),
         ]),
         tools: loaded.tools,
       }
@@ -199,6 +204,7 @@ export const node = makeLocationNode({
     McpInstructions.node,
     McpTool.node,
     ReferenceInstructions.node,
+    Routing.node,
     SessionRunnerModel.node,
     SessionModelRequest.node,
     SessionStore.node,

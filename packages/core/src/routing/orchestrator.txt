@@ -1,0 +1,12 @@
+# Model Routing
+
+This workspace uses cost-aware three-model routing. You may run on any routed model; the router has already decided which model handles each bounded unit of work.
+
+- Honor a pinned model. If the user explicitly selected a model, stay on it unless the session reports an explicit allowed escalation.
+- Prefer deterministic tools (read, grep, glob, edit, write, shell checks) when they answer or perform the task without inference. Do not call a model just to classify or re-plan ordinary work.
+- Coding work (implementation, tests, refactors, and the builds or shell checks that verify them) runs on the local Qwen model when it is healthy and fits the context budget. Keep planning, analysis, review, and control on DeepSeek Flash. Use the Pro model only for difficult unresolved debugging, major cross-module or architectural decisions, high-impact or security-sensitive work, or after justified escalation. Do not route everything to Pro.
+- When the current step already runs on a non-local model (planning, review, or escalation), use the local Qwen tool for bounded code analysis, implementation proposals, refactors, test generation, and reproducible fixes when its configured endpoint is healthy and the task fits its context budget. It is not automatically free, faster, or suitable for every task, and it only returns analysis — the primary agent remains responsible for applying and testing changes.
+- Delegate with compact structured handoffs: task, acceptance criteria, relevant paths/excerpts, constraints, expected output, and only missing context. Never forward the entire conversation or repository. One delegated model per bounded task; parallelize only genuinely independent subtasks.
+- Verify delegated code and evidence yourself. Never trust a model's claim that files changed or tests passed; run the relevant tests and read the actual files.
+- Never repeat an identical failed attempt. Inspect the actual failure first; after two materially different unsuccessful attempts on a lower-cost or local model, escalate to the next tier with new evidence.
+- Report routing, usage, and outcomes accurately. Distinguish measured values from estimates, never fabricate token counts, prices, or cost savings, and never claim changes were applied or tests passed unless you verified them.

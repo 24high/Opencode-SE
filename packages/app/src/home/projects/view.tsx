@@ -56,6 +56,8 @@ export type HomeProjectsViewProps = {
   hasUnread: (server: ServerConnection.Any, project: LocalProject) => boolean
   onWheel: (event: WheelEvent) => void
   onChooseProject: (server: ServerConnection.Any) => void
+  /** Opens the workspace setup wizard for a new project. */
+  onOpenWorkspaceSetup?: () => void
   onFocusServer: (server: ServerConnection.Any) => void
   onAuthenticateServer?: (server: ServerConnection.Any) => void
   onToggleCollapsed: (server: ServerConnection.Any) => void
@@ -187,18 +189,35 @@ function HomeProjectsPanel(props: HomeProjectsViewProps) {
         <div class="flex h-7 min-w-0 shrink-0 items-center justify-between pl-1.5 pr-3">
           <div class="text-v2-text-text-muted [font-weight:530]">{props.language.t("home.projects")}</div>
           <Show when={props.servers.length === 1 && !(props.projects.length === 0 && props.recentlyClosed.length > 0)}>
-            <Tooltip placement="bottom" value={props.language.t("home.project.add")}>
-              <IconButton
-                data-action="home-add-project"
-                variant="ghost-muted"
-                size="large"
-                class="titlebar-icon [&_[data-slot=icon-svg]]:text-v2-icon-icon-muted"
-                icon={<Icon name="folder-add-left" />}
-                disabled={props.serverHealth(props.servers[0])?.healthy === false}
-                onClick={() => props.onChooseProject(props.servers[0])}
-                aria-label={props.language.t("home.project.add")}
-              />
-            </Tooltip>
+            <div class="flex items-center gap-1">
+              <Show when={props.onOpenWorkspaceSetup}>
+                {(open) => (
+                  <Tooltip placement="bottom" value={props.language.t("home.project.wizard")}>
+                    <IconButton
+                      data-action="home-workspace-setup"
+                      variant="ghost-muted"
+                      size="large"
+                      class="titlebar-icon [&_[data-slot=icon-svg]]:text-v2-icon-icon-muted"
+                      icon={<Icon name="grid-plus" />}
+                      onClick={open()}
+                      aria-label={props.language.t("home.project.wizard")}
+                    />
+                  </Tooltip>
+                )}
+              </Show>
+              <Tooltip placement="bottom" value={props.language.t("home.project.add")}>
+                <IconButton
+                  data-action="home-add-project"
+                  variant="ghost-muted"
+                  size="large"
+                  class="titlebar-icon [&_[data-slot=icon-svg]]:text-v2-icon-icon-muted"
+                  icon={<Icon name="folder-add-left" />}
+                  disabled={props.serverHealth(props.servers[0])?.healthy === false}
+                  onClick={() => props.onChooseProject(props.servers[0])}
+                  aria-label={props.language.t("home.project.add")}
+                />
+              </Tooltip>
+            </div>
           </Show>
         </div>
       </Show>
@@ -243,6 +262,19 @@ function HomeProjectsPanel(props: HomeProjectsViewProps) {
                         <Icon name="folder-add-left" size="small" />
                         <span class={HOME_PROJECT_NAV_LABEL}>{props.language.t("home.project.add")}</span>
                       </HomeProjectNavButton>
+                      <Show when={props.onOpenWorkspaceSetup}>
+                        {(open) => (
+                          <HomeProjectNavButton
+                            type="button"
+                            data-action="home-workspace-setup-row"
+                            class="disabled:opacity-60"
+                            onClick={open()}
+                          >
+                            <Icon name="grid-plus" size="small" />
+                            <span class={HOME_PROJECT_NAV_LABEL}>{props.language.t("home.project.wizard")}</span>
+                          </HomeProjectNavButton>
+                        )}
+                      </Show>
                     </Show>
                   </Show>
                 </div>
@@ -596,6 +628,19 @@ function HomeProjectEmpty(
         <Icon name="folder-add-left" size="small" />
         <span class={HOME_PROJECT_NAV_LABEL}>{props.language.t("home.project.add")}</span>
       </HomeProjectNavButton>
+      <Show when={props.onOpenWorkspaceSetup}>
+        {(open) => (
+          <HomeProjectNavButton
+            type="button"
+            data-action="home-workspace-setup-row"
+            class="[&>[data-slot=icon-svg]]:text-v2-icon-icon-muted"
+            onClick={open()}
+          >
+            <Icon name="grid-plus" size="small" />
+            <span class={HOME_PROJECT_NAV_LABEL}>{props.language.t("home.project.wizard")}</span>
+          </HomeProjectNavButton>
+        )}
+      </Show>
       <Show when={props.items.length > 0}>
         <div class="mt-3 flex h-7 min-w-0 shrink-0 items-center pl-1.5 pr-3">
           <div class="text-v2-text-text-faint [font-weight:530]">{props.language.t("home.recentlyClosed")}</div>

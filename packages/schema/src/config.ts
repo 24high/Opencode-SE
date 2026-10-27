@@ -16,7 +16,9 @@ import { ConfigModel } from "./config/model.js"
 import { ConfigPlugin } from "./config/plugin.js"
 import { ConfigPolicy } from "./config/policy.js"
 import { ConfigProvider } from "./config/provider.js"
+import { ConfigQwen } from "./config/qwen.js"
 import { ConfigReference } from "./config/reference.js"
+import { ConfigRouting } from "./config/routing.js"
 import { ConfigWebSearch } from "./config/websearch.js"
 import { ConfigToolOutput } from "./config/tool-output.js"
 import { ConfigWatcher } from "./config/watcher.js"
@@ -84,6 +86,12 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   compaction: ConfigCompaction.Info.pipe(optional).annotate({
     description: "Conversation compaction behavior",
+  }),
+  qwen: ConfigQwen.Info.pipe(optional).annotate({
+    description: "Local Qwen endpoint settings for the qwen tool and model routing",
+  }),
+  routing: ConfigRouting.Info.pipe(optional).annotate({
+    description: "Cost-aware runtime model routing across the configured model pool",
   }),
   skills: Schema.String.pipe(Schema.Array, optional).annotate({
     description: "Additional paths or URLs to discover skills from",

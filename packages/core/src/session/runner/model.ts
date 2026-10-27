@@ -6,6 +6,7 @@ import { Model } from "@opencode/schema/model"
 import { Provider } from "@opencode/schema/provider"
 import { Context, Effect, Layer, Schema } from "effect"
 import { ModelResolver } from "../../model-resolver.js"
+import { Routing } from "../../routing/service.js"
 import { SessionSchema } from "../schema.js"
 
 export class ModelNotSelectedError extends Schema.TaggedError<ModelNotSelectedError>()(
@@ -71,9 +72,15 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const resolver = yield* ModelResolver.Service
+    const routing = yield* Routing.Service
     return Service.of({
       resolve: Effect.fn("SessionRunnerModel.resolve")(function* (session, available) {
         // Location plugins populate and filter the catalog asynchronously during layer startup.
+        // Cost-aware routing runs whenever it is enabled: it routes an unpinned
+        // session, and a pinned one only when the session explicitly opts in
+        // (the composer's Auto choice). When it declines, the pin applies.
+        const routed = yield* routing.resolve(session, available).pipe(Effect.orElseSucceed(() => undefined))
+        if (routed) return routed
         if (!session.model) {
           const resolved = yield* resolver.resolve()
           if (resolved) return resolved
@@ -93,4 +100,4 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [ModelResolver.node] })
+export const node = makeLocationNode({ service: Service, layer, deps: [ModelResolver.node, Routing.node] })

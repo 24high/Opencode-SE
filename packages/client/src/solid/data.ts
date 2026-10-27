@@ -38,6 +38,7 @@ import type {
   OpenCodeEvent,
   OpenCodeClient,
   WebSearchProvider,
+  JsonValue,
 } from "../promise"
 import { Worktree } from "@opencode/schema/worktree"
 import { SessionID } from "@opencode/schema/session-id"
@@ -1526,6 +1527,7 @@ export function createData(config: CreateDataInput) {
         model?: ModelRef
         location?: LocationRef
         projectID?: string
+        metadata?: Record<string, JsonValue>
       }) {
         const { projectID, ...payload } = input
         const id = payload.id ?? SessionID.create()
@@ -1553,7 +1555,7 @@ export function createData(config: CreateDataInput) {
         }
         // Wrapped so even a synchronous client failure reaches the rollback.
         const request = Promise.resolve()
-          .then(() => api().session.create({ ...payload, id, location }))
+          .then(() => api().session.create({ ...payload, id, location, ...(payload.metadata ? { metadata: payload.metadata } : {}) }))
           .then((info) => {
             sessionOutbox.delete(id)
             result.session.remember(info)

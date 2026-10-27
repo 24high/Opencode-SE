@@ -1,20 +1,52 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "provider": {},
-  "permission": {},
+  "providers": {
+    "qwen": {
+      "name": "qwen",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "http://127.0.0.1:47831/v1"
+      },
+      "models": {
+        "iq3_s": {
+          "name": "iq3_s",
+          "limit": { "context": 131072, "output": 8192 },
+          "cost": { "input": 0, "output": 0 }
+        }
+      }
+    }
+  },
+  "qwen": {
+    "base_url": "http://127.0.0.1:47831/v1",
+    "model": "iq3_s",
+    "provider": "qwen"
+  },
+  "routing": {
+    "enabled": true,
+    "preference": "balanced",
+    "roles": {
+      "local": "qwen/iq3_s",
+      "routine": "deepseek/deepseek-flash",
+      "pro": "deepseek/deepseek-v4-pro"
+    },
+    "attempts": { "local": 2, "routine": 2 },
+    "local_enabled": true,
+    "escalate_pinned": false
+  },
   "references": {
     "effect": {
       "repository": "github.com/Effect-TS/effect-smol",
-      "description": "Use for Effect v4 and effect-smol implementation details",
+      "description": "Use for Effect v4 and effect-smol implementation details"
     },
     "opencode-local": {
       "path": "~/.local/share/opencode",
-      "description": "Contains opencode logs and data",
-    },
+      "description": "Contains opencode logs and data"
+    }
   },
   "mcp": {},
+  "permission": {},
   "tools": {
     "github-triage": false,
-    "github-pr-search": false,
-  },
+    "github-pr-search": false
+  }
 }

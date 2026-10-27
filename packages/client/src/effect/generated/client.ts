@@ -274,6 +274,8 @@ import type {
   ConfigShellsOutput,
   ConfigUpdateInput,
   ConfigUpdateOutput,
+  ServerQwenTestInput,
+  ServerQwenTestOutput,
 } from "../api/api.js"
 import { ClientError } from "./client-error.js"
 
@@ -1644,6 +1646,20 @@ const adaptGroupConfig = (raw: RawClient["server.config"]) => ({
   update: EndpointConfigUpdate(raw),
 })
 
+const EndpointServerQwenTest = (raw: RawClient["server.qwen"]) => (input: ServerQwenTestInput) =>
+  preserveEffect<ServerQwenTestOutput>()(
+    raw["qwen.test"]({
+      payload: {
+        base_url: input["base_url"],
+        model: input["model"],
+        api_key: input["api_key"],
+        timeout_ms: input["timeout_ms"],
+      },
+    }).pipe(Effect.mapError(mapClientError)),
+  )
+
+const adaptGroupServerQwen = (raw: RawClient["server.qwen"]) => ({ test: EndpointServerQwenTest(raw) })
+
 const adaptClient = (raw: RawClient) => ({
   server: adaptGroupServer(raw["server.server"]),
   location: adaptGroupLocation(raw["server.location"]),
@@ -1676,6 +1692,7 @@ const adaptClient = (raw: RawClient) => ({
   migration: adaptGroupMigration(raw["server.migration"]),
   websearch: adaptGroupWebsearch(raw["server.websearch"]),
   config: adaptGroupConfig(raw["server.config"]),
+  "server.qwen": adaptGroupServerQwen(raw["server.qwen"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>

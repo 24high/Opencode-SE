@@ -100,6 +100,9 @@ export function createComposerModelSelection(input: {
     remembered: () => Object.fromEntries(Object.entries(remembered).map(([name, model]) => [name, { model }])),
     ready: Object.assign(() => models.ready() && configuredModel.ready(), { promise: models.ready.promise }),
     current,
+    // Automatic routing lives in the workspace draft state so creation can omit a model.
+    auto: local.model.auto,
+    setAuto: local.model.setAuto,
     recent: recentModels,
     list: models.list,
     cycle(direction: 1 | -1) {
@@ -121,6 +124,8 @@ export function createComposerModelSelection(input: {
         if (item && !valid(item)) return
         const previous = current()
         const same = item && previous?.provider.id === item.providerID && previous.id === item.modelID
+        // Picking a model leaves automatic routing for this draft.
+        local.model.setAuto(false)
         prompt.model.set(
           item ? { ...item, variant: same ? (selection.variant.current() ?? null) : undefined } : undefined,
         )

@@ -23,6 +23,8 @@ const selectedModel = {
 const selection = {
   ready: Object.assign(() => true, { promise: undefined }),
   current: () => selectedModel,
+  auto: () => false,
+  setAuto() {},
   recent: () => [selectedModel],
   list: () => [selectedModel],
   cycle() {},

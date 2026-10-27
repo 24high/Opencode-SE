@@ -2274,7 +2274,44 @@ export type ConfigEntry =
                 }
           }
         }
-        compaction?: { auto?: boolean; keep?: { tokens?: number }; buffer?: number }
+        compaction?: {
+          auto?: boolean
+          keep?: { tokens?: number }
+          buffer?: number
+          early?: {
+            enabled?: boolean
+            min_tokens?: number
+            min_benefit_tokens?: number
+            cooldown_seconds?: number
+            require_task_boundary?: boolean
+            local_summarize?: boolean
+          }
+        }
+        qwen?: {
+          base_url: string
+          model: string
+          provider?: string
+          api_key_env?: string
+          timeout_ms?: number
+          max_output_tokens?: number
+          temperature?: number | "Infinity" | "-Infinity" | "NaN"
+        }
+        routing?: {
+          enabled: boolean
+          preference: "cost-first" | "balanced" | "quality-first"
+          escalate_pinned?: boolean
+          roles?: {
+            local?: string | { providerID: string; model: string; variant?: string }
+            routine?: string | { providerID: string; model: string; variant?: string }
+            pro?: string | { providerID: string; model: string; variant?: string }
+          }
+          attempts?: {
+            local?: number | "Infinity" | "-Infinity" | "NaN"
+            routine?: number | "Infinity" | "-Infinity" | "NaN"
+          }
+          local_enabled?: boolean
+          diagnostics?: boolean
+        }
         skills?: Array<string>
         commands?: {
           [x: string]: {
@@ -6946,3 +6983,38 @@ export type ConfigShellsOutput = Array<ConfigShellOption>
 export type ConfigUpdateInput = { readonly shell: { readonly shell: string | null }["shell"] }
 
 export type ConfigUpdateOutput = void
+
+export type ServerQwenTestInput = {
+  readonly base_url: {
+    readonly base_url: string
+    readonly model: string
+    readonly api_key?: string | undefined
+    readonly timeout_ms?: number | undefined
+  }["base_url"]
+  readonly model: {
+    readonly base_url: string
+    readonly model: string
+    readonly api_key?: string | undefined
+    readonly timeout_ms?: number | undefined
+  }["model"]
+  readonly api_key?: {
+    readonly base_url: string
+    readonly model: string
+    readonly api_key?: string | undefined
+    readonly timeout_ms?: number | undefined
+  }["api_key"]
+  readonly timeout_ms?: {
+    readonly base_url: string
+    readonly model: string
+    readonly api_key?: string | undefined
+    readonly timeout_ms?: number | undefined
+  }["timeout_ms"]
+}
+
+export type ServerQwenTestOutput = {
+  ok: boolean
+  model: string
+  latency_ms?: number | undefined
+  usage?: { input?: number | undefined; output?: number | undefined } | undefined
+  error?: string | undefined
+}

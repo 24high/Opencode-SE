@@ -1,0 +1,37 @@
+.workspace-setup-dialog-label {
+  font-size: 13px;
+  font-weight: 530;
+  line-height: var(--line-height-compact);
+  color: var(--v2-text-text-base);
+}
+
+.workspace-setup-dialog-error {
+  font-size: 11px;
+  font-weight: 440;
+  line-height: var(--line-height-compact);
+  color: var(--v2-state-fg-danger);
+}
+
+.workspace-setup-dialog-hint {
+  font-size: 12px;
+  font-weight: 440;
+  line-height: var(--line-height-compact);
+  color: var(--v2-text-text-muted);
+}
+
+.workspace-setup-dialog-success {
+  font-size: 12px;
+  font-weight: 440;
+  line-height: var(--line-height-compact);
+  color: var(--v2-state-fg-success);
+}
+
+.workspace-setup-dialog-stage {
+  font-size: 13px;
+  line-height: var(--line-height-base);
+  color: var(--v2-text-text-muted);
+}
+
+.workspace-setup-dialog-stage[data-current="true"] {
+  color: var(--v2-text-text-base);
+}

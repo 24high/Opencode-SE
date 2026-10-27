@@ -26,6 +26,8 @@ export type ComposerSelection = {
   agent: string
   model: { providerID: string; modelID: string }
   variant?: string
+  /** Let cost-aware routing choose the model instead of pinning this one. */
+  auto?: boolean
 }
 
 export type ComposerDelivery = "steer" | "queue"

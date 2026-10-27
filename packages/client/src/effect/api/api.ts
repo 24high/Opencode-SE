@@ -2322,6 +2322,25 @@ export interface ConfigApi<E = never> {
   readonly update: ConfigUpdateOperation<E>
 }
 
+export type ServerQwenTestInput = {
+  readonly base_url: string
+  readonly model: string
+  readonly api_key?: string | undefined
+  readonly timeout_ms?: number | undefined
+}
+export type ServerQwenTestOutput = {
+  readonly ok: boolean
+  readonly model: string
+  readonly latency_ms?: number | undefined
+  readonly usage?: { readonly input?: number | undefined; readonly output?: number | undefined } | undefined
+  readonly error?: string | undefined
+}
+export type ServerQwenTestOperation<E = never> = (input: ServerQwenTestInput) => Effect.Effect<ServerQwenTestOutput, E>
+
+export interface ServerQwenApi<E = never> {
+  readonly test: ServerQwenTestOperation<E>
+}
+
 export interface AppApi<E = never> {
   readonly server: ServerApi<E>
   readonly location: LocationApi<E>
@@ -2354,4 +2373,5 @@ export interface AppApi<E = never> {
   readonly migration: MigrationApi<E>
   readonly websearch: WebsearchApi<E>
   readonly config: ConfigApi<E>
+  readonly "server.qwen": ServerQwenApi<E>
 }

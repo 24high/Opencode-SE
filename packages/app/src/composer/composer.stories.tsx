@@ -80,6 +80,8 @@ function ComposerStory(props: {
   const modelSelection = {
     ready: Object.assign(() => true, { promise: undefined }),
     current: () => modelOption(),
+    auto: () => false,
+    setAuto() {},
     recent: () => [modelOption()],
     list: () => [modelOption()],
     cycle() {},

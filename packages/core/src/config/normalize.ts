@@ -216,6 +216,8 @@ export function normalize(input: unknown): Result {
     websearch: Info.fields.websearch,
     worktree: Info.fields.worktree,
     warming: Info.fields.warming,
+    qwen: Info.fields.qwen,
+    routing: Info.fields.routing,
   }
   Object.entries(nativeAtomic).forEach(([key, schema]) => {
     if (!own(input, key)) return
@@ -395,6 +397,15 @@ function normalizeCompaction(
     : undefined
   const buffer = prefer(legacyBuffer, nativeBuffer, ["compaction", "buffer"], diagnostics)
   if (buffer !== undefined) result.buffer = buffer
+  if (own(input.compaction, "early")) {
+    const early = decodeEncoded(
+      ConfigCompaction.Info.fields.early,
+      input.compaction.early,
+      ["compaction", "early"],
+      diagnostics,
+    )
+    if (early !== undefined) result.early = early
+  }
   if (Object.keys(result).length || !Object.keys(input.compaction).length) encoded.compaction = result
 }
 

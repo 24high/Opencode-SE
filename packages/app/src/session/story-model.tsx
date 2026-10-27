@@ -59,6 +59,8 @@ const storyComposerModel = {
 const modelSelection = {
   ready: modelReady,
   current: () => storyComposerModel,
+  auto: () => false,
+  setAuto() {},
   recent: () => [storyComposerModel],
   list: () => [storyComposerModel],
   cycle() {},

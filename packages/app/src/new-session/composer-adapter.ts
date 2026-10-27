@@ -93,14 +93,21 @@ export function createNewSessionComposerAdapter(props: {
         return
       }
 
+      const auto = selection.auto === true
       const created = data.session.create({
         id,
         agent: selection.agent,
-        model: {
-          id: selection.model.modelID,
-          providerID: selection.model.providerID,
-          variant: selection.variant,
-        },
+        // Automatic routing owns the model: the session starts without a pin and
+        // carries the same override the composer's Auto choice uses.
+        ...(auto
+          ? { metadata: { "opencode.routing": { enabled: true } } }
+          : {
+              model: {
+                id: selection.model.modelID,
+                providerID: selection.model.providerID,
+                variant: selection.variant,
+              },
+            }),
         location: { directory: sessionDirectory },
       })
 
@@ -139,8 +146,9 @@ export function createNewSessionComposerAdapter(props: {
         if (!pending) tabs.updateDraft(draftID, { worktree: undefined, branch: undefined })
         local.session.promote(sessionDirectory, created.id, {
           agent: selection.agent,
-          model: selection.model,
-          variant: selection.variant ?? null,
+          auto,
+          model: auto ? undefined : selection.model,
+          variant: auto ? null : (selection.variant ?? null),
           choices: model.remembered(),
         })
 

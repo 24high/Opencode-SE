@@ -4,6 +4,7 @@ import { useParams } from "@solidjs/router"
 import { batch, createEffect, createMemo, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Schema, SchemaGetter } from "effect"
+import type { JsonValue } from "@opencode/client/promise"
 import { useModels } from "@/providers/models/models"
 import { useSettings } from "@/settings/model"
 import { useProviders } from "@/providers/catalog/providers"
@@ -16,7 +17,7 @@ import { useData } from "@/runtime/server/current"
 import { normalizeAgentList } from "@/runtime/server/global-sync/utils"
 import { useServerSDK } from "@/runtime/server/client"
 import { ScopedKey, type ServerScope } from "@/runtime/server/scope"
-import { useConfiguredModel } from "./configured"
+import { useConfiguredModel, useRouting } from "./configured"
 
 const ModelKeySchema = Schema.Struct({
   providerID: Schema.String,
@@ -29,6 +30,8 @@ export type ModelKey = typeof ModelKeySchema.Type
 const ChoiceSchema = Schema.Struct({
   model: Persistence.optional(ModelKeySchema),
   variant: Persistence.optional(Schema.NullOr(Schema.String)),
+  /** Automatic model routing instead of a pinned model. */
+  auto: Persistence.optional(Schema.Boolean),
 })
 
 const StateSchema = Schema.Struct({
@@ -69,6 +72,11 @@ const handoff = new Map<string, State>()
 
 const handoffKey = (scope: ServerScope, dir: string, id: string) => ScopedKey.from(scope, dir, id)
 
+/** A JSON object value, as stored in session metadata. */
+// oxlint-disable-next-line anti-slop/no-runtime-typeof -- session metadata arrives as wire JSON; the shape check is the parse.
+const isJsonObject = (value: JsonValue | undefined): value is { [key: string]: JsonValue } =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+
 const clone = (value: State | undefined) => {
   if (!value) return
 
@@ -89,6 +97,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const models = useModels()
     const settings = useSettings()
     const configuredModel = useConfiguredModel()
+    const routing = useRouting()
 
     const id = createMemo(() => params.id || undefined)
 
@@ -204,6 +213,37 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       return session ? data.session.get(session) : undefined
     }
 
+    const ROUTING_METADATA = "opencode.routing"
+
+    const routingMetadata = (session: string) => {
+      const raw = data.session.get(session)?.metadata?.[ROUTING_METADATA]
+      return isJsonObject(raw) ? raw : undefined
+    }
+
+    /**
+     * Mirrors the composer's Auto choice into the session, which is the only
+     * place core routing sees it: an enabled session override routes even when
+     * the session already carries a model.
+     */
+    const syncRouting = (session: string | undefined, enabled: boolean) => {
+      if (!session) return
+      // Only the routing entry is replaced; every other metadata value is preserved.
+      const metadata = { ...data.session.get(session)?.metadata }
+      if (enabled) metadata[ROUTING_METADATA] = { ...routingMetadata(session), enabled: true }
+      else delete metadata[ROUTING_METADATA]
+      void serverSDK.api.session.update({ sessionID: session, metadata }).catch(() => undefined)
+    }
+
+    // A draft follows the workspace routing setting until a model is picked; a
+    // session keeps its durable override, with the local choice ahead of it.
+    const auto = createMemo(() => {
+      const choice = scope()?.auto
+      if (choice !== undefined) return choice
+      const session = id()
+      if (!session) return routing()
+      return routingMetadata(session)?.enabled === true
+    })
+
     const agent = {
       list,
       visible: agentsVisible,
@@ -239,6 +279,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           } satisfies State
 
           write(next)
+          // Automatic routing owns the model, so switching the agent must not pin a fallback one.
+          if (auto()) return
           // Pin both choices while the agent and model acknowledgments arrive separately.
           const selected = current()
 
@@ -385,6 +427,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const model = {
       ready: Object.assign(() => models.ready() && configuredModel.ready(), { promise: models.ready.promise }),
       current,
+      /** Automatic routing is selected instead of a pinned model. */
+      auto,
       recent,
       list: models.list,
       trackSessionCommit(sessionID: string, selection: { agent: string; model: ModelKey; variant?: string }) {
@@ -418,7 +462,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           if (item && !validModel(item)) return
           const previous = current()
           const same = item && previous?.provider.id === item.providerID && previous.id === item.modelID
-          write({ model: item, variant: same ? (model.variant.current() ?? null) : undefined })
+          write({ auto: false, model: item, variant: same ? (model.variant.current() ?? null) : undefined })
+          syncRouting(id(), false)
 
           if (!item) return
 
@@ -428,6 +473,14 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
           if (!options?.recent) return
           models.recent.push(item)
+        })
+      },
+      /** Auto routes each step across the configured tiers instead of pinning a model. */
+      setAuto(enabled: boolean) {
+        batch(() => {
+          if (enabled) write({ auto: true, model: undefined, variant: null })
+          else write({ auto: false })
+          syncRouting(id(), enabled)
         })
       },
       visible(item: ModelKey) {

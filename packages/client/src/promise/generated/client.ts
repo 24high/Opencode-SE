@@ -272,6 +272,8 @@ import type {
   ConfigShellsOutput,
   ConfigUpdateInput,
   ConfigUpdateOutput,
+  ServerQwenTestInput,
+  ServerQwenTestOutput,
 } from "./types.js"
 import { ClientError } from "./client-error.js"
 
@@ -2278,6 +2280,25 @@ export function make(options: ClientOptions) {
             successStatus: 204,
             declaredStatuses: [400, 401, 404],
             empty: true,
+          },
+          requestOptions,
+        ),
+    },
+    "server.qwen": {
+      test: (input: ServerQwenTestInput, requestOptions?: RequestOptions) =>
+        request<ServerQwenTestOutput>(
+          {
+            method: "POST",
+            path: `/api/experimental/qwen/test`,
+            body: {
+              base_url: input["base_url"],
+              model: input["model"],
+              api_key: input["api_key"],
+              timeout_ms: input["timeout_ms"],
+            },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
           },
           requestOptions,
         ),

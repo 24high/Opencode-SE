@@ -333,6 +333,7 @@ function currentSelection(input: ComposerSubmitInput): ComposerSelection | undef
     agent,
     model: { modelID: model.id, providerID: model.provider.id },
     variant: controls.model.selection.variant.current(),
+    auto: controls.model.selection.auto(),
   }
 }
 
@@ -478,6 +479,13 @@ async function applySelection(
     }
 
     await beforeModel?.()
+
+    // Automatic routing owns the model for this session, so a send must not pin it.
+    if (selection.auto) {
+      cancel?.()
+
+      return
+    }
 
     // The server deduplicates unchanged selections; cached SSE state may still be behind an earlier switch.
     await session.api.switchModel({

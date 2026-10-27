@@ -17,6 +17,8 @@ import type { HomeController } from "../model"
 import { useGlobal } from "@/runtime/server/runtime"
 import { SessionTransfer } from "@opencode/schema/session-transfer"
 import { useRevealProject } from "./reveal"
+import { openWorkspaceSetupWizard } from "@/workspace-setup/open"
+import { useTabs } from "@/shell/tabs/tabs"
 
 export const HomeServersSchema = Schema.Struct({
   collapsed: Persistence.record(Persistence.fallback(Schema.Boolean, () => false)),
@@ -26,6 +28,7 @@ export function createHomeProjectsController(home: HomeController) {
   const platform = usePlatform()
   const pickDirectory = useDirectoryPicker()
   const dialog = useDialog()
+  const tabs = useTabs()
   const language = useLanguage()
   const openSettings = useSettingsCommand()
   const settings = useSettingsSurface()
@@ -183,6 +186,12 @@ export function createHomeProjectsController(home: HomeController) {
     utility: {
       settings: openSettings,
       help: () => platform.openExternal("https://opencode.ai/desktop-feedback"),
+      workspaceSetup: () => {
+        const conn = home.server.focused()
+        const context = home.server.focusedContext()
+        if (!conn || !context) return
+        openWorkspaceSetupWizard(dialog, { server: conn, context, tabs })
+      },
     },
   }
 }

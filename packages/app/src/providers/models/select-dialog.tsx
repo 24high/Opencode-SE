@@ -47,6 +47,8 @@ type ModelItem = ReturnType<ModelState["list"]>[number]
 
 const modelKey = (model: ModelItem) => `${model.provider.id}:${model.id}`
 
+const autoKey = "model:auto"
+
 const manageKey = "action:manage"
 
 const sortModelGroups = (a: { category: string; items: ModelItem[] }, b: { category: string; items: ModelItem[] }) => {
@@ -113,7 +115,7 @@ const ModelList: Component<{
   }
 
   const moveActive = (delta: number) => {
-    const keys = visibleModels().map(modelKey)
+    const keys = [autoKey, ...visibleModels().map(modelKey)]
 
     if (keys.length === 0) return
     const index = keys.indexOf(store.active)
@@ -127,9 +129,43 @@ const ModelList: Component<{
   }
 
   const selectActive = () => {
+    if (store.active === autoKey) {
+      controller.selectAuto()
+
+      return
+    }
     const item = visibleModels().find((item) => modelKey(item) === store.active)
 
     if (item) controller.select(item)
+  }
+
+  function AutoRow() {
+    return (
+      <SettingsList variant="catalog">
+        <button
+          type="button"
+          data-component="settings-row"
+          data-option-key={autoKey}
+          aria-pressed={controller.auto()}
+          class="-mx-4 w-[calc(100%+32px)] px-4 text-start first:rounded-t-lg last:rounded-b-lg hover:bg-v2-overlay-simple-overlay-hover focus-visible:bg-v2-overlay-simple-overlay-hover focus-visible:outline-none"
+          classList={{ "bg-v2-overlay-simple-overlay-hover": store.active === autoKey }}
+          onMouseEnter={() => setStore("active", autoKey)}
+          onMouseLeave={() => setStore("active", "")}
+          onClick={() => controller.selectAuto()}
+        >
+          <div data-slot="settings-row-copy">
+            <div data-slot="settings-row-title" class="flex items-center gap-2">
+              <span class="min-w-0 truncate">{language.t("dialog.model.auto")}</span>
+            </div>
+          </div>
+          <div data-slot="settings-row-control" class="size-4">
+            <Show when={controller.auto()}>
+              <Icon name="check" size="small" class="shrink-0 text-v2-icon-icon-base" />
+            </Show>
+          </div>
+        </button>
+      </SettingsList>
+    )
   }
 
   function ModelRows(props: { items: ModelItem[]; mobile?: boolean }) {
@@ -231,6 +267,7 @@ const ModelList: Component<{
           class="settings-panel settings-models pt-1 pb-4"
           classList={{ "h-full px-4": !props.mobile, "max-h-[min(360px,40dvh)]": props.mobile }}
         >
+          <AutoRow />
           <Show
             when={models().length > 0}
             fallback={<div class="settings-models-status">{language.t("dialog.model.empty")}</div>}
@@ -302,6 +339,8 @@ export function ModelSelectorPopover(props: {
           models={controller.models}
           groups={controller.groups}
           current={controller.current()}
+          auto={controller.auto()}
+          onSelectAuto={controller.selectAuto}
           chatgptPlan={chatgptPlan()}
           select={controller.select}
           onManage={manage}
@@ -481,9 +520,15 @@ function createModelSelectorController(input: {
       return Array.from(byProvider, ([category, items]) => ({ category, items })).sort(sortModelGroups)
     },
     current: () => {
+      if (model.auto()) return autoKey
       const value = model.current()
 
       return value ? modelKey(value) : undefined
+    },
+    auto: () => model.auto(),
+    selectAuto: () => {
+      model.setAuto(true)
+      input.onSelect()
     },
     select: (item: ModelItem) => {
       model.set({ modelID: item.id, providerID: item.provider.id }, { recent: true })
@@ -498,6 +543,8 @@ export function ModelSelectorPopoverView(props: {
   models: (search: string) => ModelItem[]
   groups: (models: ModelItem[]) => { category: string; items: ModelItem[] }[]
   current: string | undefined
+  auto?: boolean
+  onSelectAuto?: () => void
   chatgptPlan?: boolean
   select: (item: ModelItem) => void
   onManage: () => void
@@ -511,7 +558,7 @@ export function ModelSelectorPopoverView(props: {
 
   const models = createMemo(() => props.models(store.search))
   const groups = createMemo(() => props.groups(models()))
-  const keys = () => [...groups().flatMap((group) => group.items.map(modelKey)), manageKey]
+  const keys = () => [autoKey, ...groups().flatMap((group) => group.items.map(modelKey)), manageKey]
 
   const managed = createMemo(() => consoleModelGroup(props.all()))
   const managedIDs = createMemo(() => new Set(managed()?.providers.map((provider) => provider.id)))
@@ -529,6 +576,7 @@ export function ModelSelectorPopoverView(props: {
   )
 
   const initialActive = () => {
+    if (props.auto) return autoKey
     const selected = props.current
     const options = keys()
 
@@ -569,7 +617,18 @@ export function ModelSelectorPopoverView(props: {
     dismiss.afterClose(props.onManage)
   }
 
+  const selectAuto = () => {
+    dismiss.preventTriggerRestore()
+    setOpen(false)
+    dismiss.afterClose(() => props.onSelectAuto?.())
+  }
+
   const selectActive = () => {
+    if (store.active === autoKey) {
+      selectAuto()
+
+      return
+    }
     const item = models().find((item) => modelKey(item) === store.active)
 
     if (item) {
@@ -682,6 +741,22 @@ export function ModelSelectorPopoverView(props: {
           <div class="h-px bg-v2-border-border-muted" />
           <ScrollView data-slot="model-selector-scroll" class="max-h-[220px] min-h-0">
             <div class="flex flex-col p-0.5 pt-0">
+              <Menu.RadioGroup value={props.current}>
+                <Menu.RadioItem
+                  value={autoKey}
+                  data-option-key={autoKey}
+                  data-selected-model={props.auto ? true : undefined}
+                  class="scroll-my-6 w-full"
+                  classList={{ "!bg-v2-overlay-simple-overlay-hover": store.active === autoKey }}
+                  onMouseEnter={() => {
+                    setStore("active", autoKey)
+                    setTimeout(() => searchRef?.focus())
+                  }}
+                  onSelect={selectAuto}
+                >
+                  <span class="min-w-0 truncate leading-5">{language.t("dialog.model.auto")}</span>
+                </Menu.RadioItem>
+              </Menu.RadioGroup>
               <Show
                 when={models().length > 0}
                 fallback={
