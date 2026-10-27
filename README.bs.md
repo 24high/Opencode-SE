@@ -43,6 +43,71 @@
 
 ---
 
+### Automatsko usmjeravanje modela
+
+OpenCode može birati model za svaki korak umjesto da zadrži jedan model cijelu sesiju: lokalni ili jeftiniji model radi rutinski posao, a najjači model je rezervisan za dijelove koji ga zaista trebaju. Usmjeravanje je isključeno dok ne uključite `routing.enabled`.
+
+Odaberite **Auto (Routing)** u biraču modela da sesija automatski usmjerava model. Ako odaberete određeni model, sesija se vezuje za njega i usmjeravanje se ne miješa.
+
+| Nivo    | Zadano                               | Radi                                                              |
+| ------- | ------------------------------------ | ------------------------------------------------------------------ |
+| Local   | model iz vaše `qwen` konfiguracije   | implementacija, testovi, refactoriranje te build i shell koraci koji ih provjeravaju |
+| Routine | najjeftiniji aktivni DeepSeek Flash model | planiranje, analiza, pregled, objašnjenja i uobičajeno debagiranje |
+| Pro     | najjači aktivni DeepSeek model       | arhitektura i veliki refactorinzi, teško debagiranje, posao osjetljiv na sigurnost |
+
+- Vaš zadnji zahtjev određuje osnovnu klasifikaciju, a zatim se svaki korak u krugu ponovo klasificira na osnovu toga šta je krug već uradio: koraci koji samo čitaju i pretražuju ostaju na Routine nivou. Čim neki korak izmijeni datoteke ili pokrene komandu, ostatak kruga nastavlja izvršavanje na Local nivou. Dva uzastopna koraka s neuspjelim pozivima alata računaju se kao teško debagiranje i idu na Pro nivo. Uz `routing.step_routing: false` krug ostaje na jednom nivou.
+- Nivo se koristi samo kad je model uključen i trenutno ispravan te kad konverzacija i dalje staje u njegov kontekstni prozor.
+- Nakon `routing.attempts` neuspjeha posao prelazi na sljedeći nivo, a model koji ne radi preskače se na kratko vrijeme. Prekid izvršavanja nikada se ne računa kao greška modela.
+- `routing.preference` balansira između cijene i kvaliteta: `cost-first`, `balanced` (podrazumijevano) ili `quality-first`. Pri svakoj promjeni modela sesija prikazuje kratku bilješku s modelom, nivoom i razlogom (`routing.diagnostics`).
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  // Bilo koji OpenAI-kompatibilan server: llama.cpp, Ollama, vLLM, LM Studio, ...
+  "providers": {
+    "local": {
+      "package": "aisdk:@ai-sdk/openai-compatible",
+      "settings": { "baseURL": "http://127.0.0.1:8080/v1" },
+      "models": { "qwen3-coder": { "limit": { "context": 131072, "output": 8192 } } },
+    },
+  },
+  "qwen": { "base_url": "http://127.0.0.1:8080/v1", "model": "qwen3-coder", "provider": "local" },
+  "routing": {
+    "enabled": true,
+    "preference": "balanced",
+    // Opcionalno. Uloge koje nisu postavljene preuzimaju se iz kataloga.
+    "roles": { "local": "local/qwen3-coder", "routine": "deepseek/deepseek-chat", "pro": "deepseek/deepseek-reasoner" },
+    "step_routing": true,
+  },
+}
+```
+
+### Čarobnjak za postavljanje radnog okruženja
+
+Aplikacija može postaviti čitavo radno okruženje projekta umjesto vas: generiše artefakte, provjerava ih, otvara projekat i pokreće prvi zadatak u sesiji. Otvorite **Novi radni prostor projekta** na početnoj strani projekata (ikona mreže u zaglavlju) ili iz palete komandi. Čarobnjak pita za opis projekta i direktorij u koji se generiše, jezik izlaza, izbor modela (automatsko usmjeravanje s tri modela ili vezani model uz preferenciju `cost-first`, `balanced`, `quality-first`), opciono lokalni model (bazni URL, ID modela, ID pružaoca, opcioni API ključ, tajmaut i maksimalni izlazni tokeni) sa testom konekcije te da li uključiti rano štedljivo sažimanje. Zatim prolazi kroz vidljive faze i ostavlja otvorenu sesiju s početnim zadatkom; neuspjela faza se može nastaviti, a otkazano izvršavanje zadržava datoteke koje su već kreirane.
+
+Na disk se ne piše ništa tajno: opcioni lokalni API ključ ide u spremnik kredencijala i samo ime njegove env varijable može se pojaviti u generisanom projektnom `opencode.json`, koji primjenjuje iste odluke o usmjeravanju i sažimanju na kasniji rad u tom projektu.
+
+### Automatsko sažimanje
+
+Duge sesije sažimaju se u trajnu kontrolnu tačku tako da konverzacija i dalje staje u prozor modela. Dva nezavisna okidača koriste isti mehanizam.
+
+**Sažimanje zbog granice konteksta** uključeno je podrazumijevano (`compaction.auto`): izvršava se kada procijenjeni zahtjev pređe plafon modela, doslovno čuva zadnjih `compaction.keep.tokens` (15.000 podrazumijevano) a ostatak sažima.
+
+**Rano štedljivo sažimanje** je opcionalno (`compaction.early.enabled`) i djeluje prije nego što je granica na vidiku: izvršava se samo kad cjelokupni kontekst iznosi barem `min_tokens` (24.000) i kad samo uklonjivi dio vrijedi barem `min_benefit_tokens` (8.000) tokena, najviše jednom na `cooldown_seconds` (300) po sesiji. `require_task_boundary` čeka prirodnu pauzu; zadana vrijednost je `true`, ali jedan krug poziva alata nikada ne dolazi do takve pauze, pa je `false` ono što omogućava da se dugi agentski krugovi uopšte sažimaju. `local_summarize` šalje sažetak lokalnom modelu i bilježi njegovo korištenje i cijenu.
+
+```jsonc
+{
+  "compaction": {
+    "auto": true,
+    "keep": { "tokens": 15000 },
+    "early": { "enabled": true, "min_tokens": 24000, "min_benefit_tokens": 8000, "cooldown_seconds": 300, "require_task_boundary": false, "local_summarize": false },
+  },
+}
+```
+
+Izvršavanje sažimanja treba izlazni prostor za sopstveni sažetak; lokalni model s malim `limit.output` može ostati bez njega i pasti s `Compaction summary reached the output token limit` – povećajte to ograničenje ili isključite `local_summarize` kada to vidite.
+
 ### Instalacija
 
 ```bash

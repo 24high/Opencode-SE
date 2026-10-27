@@ -46,8 +46,24 @@ export interface Route {
   readonly estimates: boolean
 }
 
+export interface StepSignals {
+  /** Tool calls of the most recent settled Step that ended in error. */
+  readonly previousFailures: number
+  /** Settled Steps at the end of this turn that each had at least one failed tool call. */
+  readonly failureStreak: number
+  /** Whether any settled Step of this turn has already changed the workspace. */
+  readonly executed: boolean
+}
+
 const OUTPUT_RESERVE = 4_000
 const OVERHEAD_MARGIN = 1.15
+
+/**
+ * Tools whose results change the workspace, so the Step that follows continues
+ * execution. Anything else, including reads, searches, subagents, and MCP
+ * tools, counts as gathering or interpreting information.
+ */
+export const EXECUTION_TOOLS: ReadonlySet<string> = new Set(["edit", "write", "patch", "shell"])
 
 /**
  * Coding work the local model may take when healthy and within its context
@@ -209,6 +225,27 @@ export const classifyTask = (text: string): Omit<Evidence, "estimatedInputTokens
     return { task: "refactor", complexity: classifyComplexity(text), riskElevated: false }
 
   return { task: "bounded-code", complexity: classifyComplexity(text), riskElevated: false }
+}
+
+/**
+ * Re-classifies the base task for the Step that is about to run. Routing is
+ * re-decided for every Step, so one turn mixes tiers instead of locking every
+ * Step to the tier chosen from the user's request: while the turn has only
+ * gathered information the Step plans and interprets, and once it has changed
+ * files the same model keeps executing so the tier does not flip on every
+ * read. Repeated tool failures turn the Step into debugging. Security,
+ * architecture, and debug work already select a stronger tier than the local
+ * model, so their classification is left alone.
+ */
+export const classifyStep = (
+  base: Omit<Evidence, "estimatedInputTokens">,
+  signals: StepSignals,
+): Omit<Evidence, "estimatedInputTokens"> => {
+  if (!LOCAL_TASKS.has(base.task)) return base
+  if (signals.failureStreak >= 2) return { task: "debug", complexity: "high", riskElevated: false }
+  if (signals.previousFailures > 0) return { task: "debug", complexity: base.complexity, riskElevated: false }
+  if (signals.executed) return base
+  return { ...base, task: "analysis" }
 }
 
 const classifyComplexity = (text: string) => {

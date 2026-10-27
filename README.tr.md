@@ -43,6 +43,71 @@
 
 ---
 
+### Otomatik model yönlendirmesi
+
+OpenCode tüm oturum boyunca tek bir modele bağlı kalmak yerine her adım için bir model seçebilir: yerel ya da ucuz bir model rutin işi yapar, en güçlü model gerçekten gerektiren kısımlara ayrılır. Yönlendirme, `routing.enabled` açılana kadar kapalı kalır.
+
+Bir oturumu otomatik yönlendirmek için model seçicide **Auto (Routing)** seçin. Belirli bir model seçerseniz oturum o modele sabitlenir ve yönlendirme ona dokunmaz.
+
+| Katman  | Varsayılan                           | Şunları üstlenir                                                                |
+| ------- | ------------------------------------ | ------------------------------------------------------------------------------- |
+| Local   | `qwen` yapılandırmanızdaki model     | uygulama, testler, refactorlar ve bunları doğrulayan derleme ve kabuk adımları   |
+| Routine | en ucuz etkin DeepSeek Flash modeli  | planlama, analiz, inceleme, açıklamalar ve olağan hata ayıklama                 |
+| Pro     | en güçlü etkin DeepSeek modeli       | mimari ve büyük refactorlar, zor hata ayıklama, güvenlik açısından hassas işler  |
+
+- Son isteğiniz temel sınıflandırmayı belirler, ardından tur içindeki her adım turun yaptıklarına göre yeniden sınıflandırılır: yalnızca okuyup arayan adımlar Routine katmanında kalır. Bir adım dosya değiştirdiğinde ya da bir komut çalıştırdığında turun kalanı Local katmanında yürütülür. Ardışık iki adımda araç çağrıları başarısız olursa zor hata ayıklama sayılır ve Pro katmanına gider. `routing.step_routing: false` ayarlıysa tur tek katmanda kalır.
+- Bir katman yalnızca modeli etkin ve şu anda sağlıklıysa ve konuşma hâlâ bağlam penceresine sığıyorsa kullanılır.
+- `routing.attempts` kadar hatadan sonra iş bir üst katmana taşınır ve başarısız model kısa bir bekleme süresi boyunca atlanır. Bir çalıştırmayı durdurmak asla model hatası sayılmaz.
+- `routing.preference` maliyet ile kalite arasında denge kurar: `cost-first`, `balanced` (varsayılan) ya da `quality-first`. Model her değiştiğinde oturum, modeli, katmanı ve gerekçeyi yazan kısa bir not gösterir (`routing.diagnostics`).
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  // Her OpenAI uyumlu sunucu: llama.cpp, Ollama, vLLM, LM Studio, ...
+  "providers": {
+    "local": {
+      "package": "aisdk:@ai-sdk/openai-compatible",
+      "settings": { "baseURL": "http://127.0.0.1:8080/v1" },
+      "models": { "qwen3-coder": { "limit": { "context": 131072, "output": 8192 } } },
+    },
+  },
+  "qwen": { "base_url": "http://127.0.0.1:8080/v1", "model": "qwen3-coder", "provider": "local" },
+  "routing": {
+    "enabled": true,
+    "preference": "balanced",
+    // İsteğe bağlı. Belirlenmemiş roller katalogdan bulunur.
+    "roles": { "local": "local/qwen3-coder", "routine": "deepseek/deepseek-chat", "pro": "deepseek/deepseek-reasoner" },
+    "step_routing": true,
+  },
+}
+```
+
+### Çalışma alanı kurulum sihirbazı
+
+Uygulama sizin için tam bir proje çalışma alanı kurabilir: artefaktları üretir, doğrular, projeyi açar ve ilk görevi bir oturumda başlatır. Projeler ana ekranından **Yeni proje çalışma alanı** öğesini (üst bilgideki ızgara simgesi) ya da komut paletinden açın. Sihirbaz şunları sorar: proje açıklaması ve üretilecek dizin, çıktı dili, model seçimi (otomatik üç model yönlendirmesi ya da `cost-first`, `balanced`, `quality-first` tercihiyle sabitlenmiş bir model), isteğe bağlı olarak bir yerel model (temel URL, model kimliği, sağlayıcı kimliği, isteğe bağlı API anahtarı, zaman aşımı ve en fazla çıktı belirteci) ve bağlantı testi, erken maliyet duyarlı sıkıştırmanın yapılıp yapılmayacağı. Ardından görülebilir aşamaları tamamlar ve ilk görev oturumunu açık bırakır; başarısız bir aşama yeniden başlatılabilir, iptal edilen bir çalıştırma ise zaten oluşturduğu dosyaları korur.
+
+Diske hiçbir gizli bilgi yazılmaz: isteğe bağlı yerel API anahtarı kimlik bilgisi deposuna gider ve projenin üretilen `opencode.json` dosyasında yalnızca ortam değişkeninin adı görünebilir. Bu dosya, projedeki sonraki çalışmalar için aynı yönlendirme ve sıkıştırma kararlarını uygular.
+
+### Otomatik sıkıştırma
+
+Uzun oturumlar, konuşma modelin penceresine sığmaya devam etsin diye kalıcı bir kontrol noktasına özetlenir. İki bağımsız tetikleyici bu mekanizmayı paylaşır.
+
+**Bağlam sınırı sıkıştırması** varsayılan olarak açıktır (`compaction.auto`): tahmin edilen istek modelin tavanını aştığında çalışır, son `compaction.keep.tokens` (varsayılan 15.000) belirteci aynen korur ve gerisini özetler.
+
+**Erken maliyet duyarlı sıkıştırma** isteğe bağlıdır (`compaction.early.enabled`) ve sınır görünmeden devreye girer: yalnızca tüm bağlam en az `min_tokens` (24.000) olduğunda ve çıkarılacak bölümün kendisi en az `min_benefit_tokens` (8.000) belirtece değdiğinde, oturum başına en fazla her `cooldown_seconds` (300) saniyede bir çalışır. `require_task_boundary` doğal bir ara bekler; varsayılan değeri `true`tır, ancak araç çağıran tek bir tur böyle bir araya asla ulaşmaz, bu yüzden uzun ajan turlarının sıkıştırılmasını sağlayan şey `false` değeridir. `local_summarize` özeti yapılandırılan yerel modele gönderir ve o modelin kullanımını ve maliyetini kaydeder.
+
+```jsonc
+{
+  "compaction": {
+    "auto": true,
+    "keep": { "tokens": 15000 },
+    "early": { "enabled": true, "min_tokens": 24000, "min_benefit_tokens": 8000, "cooldown_seconds": 300, "require_task_boundary": false, "local_summarize": false },
+  },
+}
+```
+
+Bir sıkıştırma çalıştırması kendi özeti için çıktı alanına ihtiyaç duyar; `limit.output` değeri küçük bir yerel model bunu tüketebilir ve `Compaction summary reached the output token limit` hatasıyla başarısız olabilir — bunu gördüğünüzde o sınırı yükseltin ya da `local_summarize` kapalı bırakın.
+
 ### Kurulum
 
 ```bash

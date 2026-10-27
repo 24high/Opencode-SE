@@ -37,6 +37,13 @@ export class Info extends Schema.Class<Info>("Config.Routing")({
   }).pipe(optional),
   /** Whether the local Qwen tier participates in routing at all. */
   local_enabled: Schema.Boolean.pipe(optional),
+  /**
+   * Re-classify every step from the steps already settled in the same turn, so
+   * one turn can mix tiers: planning and interpreting steps on the routine tier,
+   * edit and command steps on the local tier, repeated tool failures escalated to
+   * a stronger tier. Default true; set false to keep one tier per turn.
+   */
+  step_routing: Schema.Boolean.pipe(optional),
   /** Emit concise synthetic route diagnostics into the session. */
   diagnostics: Schema.Boolean.pipe(optional),
 }) {}

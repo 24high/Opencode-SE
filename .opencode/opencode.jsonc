@@ -10,7 +10,7 @@
       "models": {
         "iq3_s": {
           "name": "iq3_s",
-          "limit": { "context": 131072, "output": 8192 },
+          "limit": { "context": 131072, "output": 16384 },
           "cost": { "input": 0, "output": 0 }
         }
       }
@@ -32,6 +32,18 @@
     "attempts": { "local": 2, "routine": 2 },
     "local_enabled": true,
     "escalate_pinned": false
+  },
+  "compaction": {
+    "auto": true,
+    "early": {
+      "enabled": true,
+      "min_tokens": 24000,
+      "min_benefit_tokens": 8000,
+      "cooldown_seconds": 300,
+      // Compacting only at task boundaries means one long tool-heavy turn can never compact.
+      "require_task_boundary": false,
+      "local_summarize": false
+    }
   },
   "references": {
     "effect": {

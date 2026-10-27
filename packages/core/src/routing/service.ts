@@ -53,6 +53,8 @@ export const Settings = Schema.Struct({
   ),
   escalate_pinned: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   local_enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Re-classify every Step from the steps already settled in the turn, so one turn can mix tiers. */
+  step_routing: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   diagnostics: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   attempts: Schema.Struct({
     local: Schema.Number.pipe(Schema.withDecodingDefault(Effect.succeed(2))),
@@ -100,6 +102,7 @@ const defaultSettings = (): Settings => ({
   preference: "balanced",
   escalate_pinned: false,
   local_enabled: true,
+  step_routing: true,
   diagnostics: true,
   attempts: { local: 2, routine: 2 },
   roles: {},
@@ -123,6 +126,7 @@ export const overrideSettings = (base: Settings, raw: unknown): Settings => {
     ...(raw.preference === undefined ? {} : { preference: next.preference }),
     ...(raw.escalate_pinned === undefined ? {} : { escalate_pinned: next.escalate_pinned }),
     ...(raw.local_enabled === undefined ? {} : { local_enabled: next.local_enabled }),
+    ...(raw.step_routing === undefined ? {} : { step_routing: next.step_routing }),
     ...(raw.diagnostics === undefined ? {} : { diagnostics: next.diagnostics }),
     attempts: mergeAttempts(base.attempts, raw.attempts, next.attempts),
     roles: mergeRoles(base.roles, raw.roles, next.roles),
@@ -285,20 +289,6 @@ const layer = Layer.effect(
       return candidates
     }
 
-    const evidence = (messages: ReadonlyArray<SessionMessage.Info>) => {
-      const last = messages.filter((message) => message.type === "user").at(-1)
-      const text = last?.text ?? ""
-      // Every step resends the conversation, so the context budget must cover the
-      // whole request, not only the latest user message. The fixed overhead stands
-      // in for the system prompt and tool schemas.
-      const history = messages.reduce(
-        (total, message) => total + Token.estimate("text" in message ? (message.text ?? "") : ""),
-        0,
-      )
-      const estimatedInputTokens = Math.max(history, Token.estimate(text)) + 512
-      return { ...RoutingPolicy.classifyTask(text), estimatedInputTokens }
-    }
-
     const tierBudgetExceeded = (current: SessionState, tier: RoutingPolicy.Tier, settings: Settings) => {
       const max = tier === "local" ? settings.attempts.local : settings.attempts.routine
       return (current.failures[tierKey(tier)] ?? 0) >= max
@@ -327,7 +317,7 @@ const layer = Layer.effect(
         const route = RoutingPolicy.selectRoute({
           preference: settings.preference as RoutingPolicy.Preference,
           candidates,
-          evidence: evidence(history),
+          evidence: routeEvidence(history, settings.step_routing),
           budget: {
             localEnabled: settings.local_enabled,
             localFailures: current.failures[tierKey("local")] ?? 0,
@@ -361,12 +351,15 @@ const layer = Layer.effect(
         // permission, and configuration failures say nothing about its tier.
         if (!error.type.startsWith("provider.")) return
         const current = state(sessionID)
-        if (AVAILABILITY.has(error.type)) {
-          current.unhealthy[refKey(model)] = Date.now() + UNAVAILABLE_MS
-          return
-        }
         const tier = modelTier.get(refKey(model))
         if (tier === undefined) return
+        // Cooldowns are tracked per tier, which is how eligibility reads them: a
+        // rate-limited routine model routes around the routine tier, not only
+        // around that exact model id.
+        if (AVAILABILITY.has(error.type)) {
+          current.unhealthy[tierKey(tier)] = Date.now() + UNAVAILABLE_MS
+          return
+        }
         current.failures[tierKey(tier)] = (current.failures[tierKey(tier)] ?? 0) + 1
       }),
       recordSuccess: Effect.fn("Routing.recordSuccess")(function* (sessionID, model) {
@@ -388,6 +381,47 @@ export const node = makeLocationNode({
 // ———— helpers ————
 
 const finiteCost = (costs: Model.Info["cost"] | undefined) => costs?.find((cost) => cost.tier === undefined) ?? costs?.[0]
+
+/**
+ * Reads what the current turn has already done so each Step is classified from
+ * its own position instead of only from the user's request. The turn starts
+ * after the latest user message, so compaction, synthetic, and system records
+ * never look like steps.
+ */
+export const stepSignals = (messages: ReadonlyArray<SessionMessage.Info>): RoutingPolicy.StepSignals => {
+  const turn = messages.slice(messages.findLastIndex((message) => message.type === "user") + 1)
+  const steps = turn.filter((message): message is SessionMessage.Assistant => message.type === "assistant")
+  const tools = (message: SessionMessage.Assistant) =>
+    message.content.filter((part): part is SessionMessage.AssistantTool => part.type === "tool")
+  const failed = (message: SessionMessage.Assistant) => tools(message).some((tool) => tool.state.status === "error")
+  const previous = steps.at(-1)
+  let failureStreak = 0
+  for (let index = steps.length - 1; index >= 0 && failed(steps[index]); index--) failureStreak += 1
+  return {
+    previousFailures: previous === undefined ? 0 : tools(previous).filter((tool) => tool.state.status === "error").length,
+    failureStreak,
+    executed: steps.some((step) => tools(step).some((tool) => RoutingPolicy.EXECUTION_TOOLS.has(tool.name))),
+  }
+}
+
+/**
+ * Builds the routing evidence for the next Step. `stepRouting` re-classifies the
+ * request from the settled steps; without it every Step of a turn keeps the tier
+ * chosen from the user's request.
+ */
+const routeEvidence = (messages: ReadonlyArray<SessionMessage.Info>, stepRouting: boolean): RoutingPolicy.Evidence => {
+  const text = messages.filter((message) => message.type === "user").at(-1)?.text ?? ""
+  // Every step resends the conversation, so the context budget must cover the
+  // whole request, not only the latest user message. The fixed overhead stands
+  // in for the system prompt and tool schemas.
+  const history = messages.reduce((total, message) => total + Token.estimate("text" in message ? (message.text ?? "") : ""), 0)
+  const estimatedInputTokens = Math.max(history, Token.estimate(text)) + 512
+  const classified = RoutingPolicy.classifyTask(text)
+  return {
+    ...(stepRouting ? RoutingPolicy.classifyStep(classified, stepSignals(messages)) : classified),
+    estimatedInputTokens,
+  }
+}
 
 const isUnhealthy = (state: SessionState, tier: RoutingPolicy.Tier) => {
   const until = state.unhealthy[tierKey(tier)]

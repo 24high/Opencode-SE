@@ -32,7 +32,7 @@ test("the config block is deterministic JSON without secrets", () => {
       min_tokens: 24000,
       min_benefit_tokens: 8000,
       cooldown_seconds: 300,
-      require_task_boundary: true,
+      require_task_boundary: false,
       local_summarize: false,
     },
   })

@@ -43,6 +43,71 @@
 
 ---
 
+### Tự động định tuyến mô hình
+
+OpenCode có thể chọn một mô hình cho từng bước thay vì giữ một mô hình suốt phiên: một mô hình cục bộ hoặc rẻ làm phần việc thường xuyên, còn mô hình mạnh nhất được dành cho những phần thực sự cần nó. Định tuyến tắt cho đến khi bạn bật `routing.enabled`.
+
+Chọn **Auto (Routing)** trong trình chọn mô hình để định tuyến phiên một cách tự động. Nếu chọn một mô hình cụ thể, phiên sẽ bị ghim vào mô hình đó và định tuyến không can thiệp.
+
+| Cấp     | Mặc định                             | Phụ trách                                                                       |
+| ------- | ------------------------------------ | ------------------------------------------------------------------------------- |
+| Local   | mô hình trong cấu hình `qwen` của bạn | triển khai, thử nghiệm, tái cấu trúc và các bước build cũng như shell để kiểm chứng chúng |
+| Routine | mô hình DeepSeek Flash đang bật rẻ nhất | lập kế hoạch, phân tích, xem xét, giải thích và gỡ lỗi thông thường    |
+| Pro     | mô hình DeepSeek đang bật mạnh nhất  | kiến trúc và tái cấu trúc lớn, gỡ lỗi khó, công việc nhạy cảm về bảo mật         |
+
+- Yêu cầu gần nhất của bạn đặt ra phân loại gốc, sau đó mỗi bước trong lượt được phân loại lại dựa trên những gì lượt đã làm: các bước chỉ đọc và tìm kiếm vẫn ở cấp Routine. Khi một bước đã sửa tệp hoặc chạy lệnh, phần còn lại của lượt tiếp tục thực thi ở cấp Local. Hai bước liên tiếp có lời gọi công cụ thất bại được coi là gỡ lỗi khó và chuyển sang cấp Pro. Với `routing.step_routing: false`, một lượt giữ nguyên một cấp.
+- Một cấp chỉ được dùng khi mô hình đó được bật và đang khỏe, và cuộc hội thoại vẫn nằm trong cửa sổ ngữ cảnh của nó.
+- Sau `routing.attempts` lần thất bại, công việc được nâng lên cấp kế tiếp và mô hình lỗi sẽ bị bỏ qua trong một thời gian chờ ngắn. Việc gián đoạn một lượt chạy không bao giờ tính là lỗi mô hình.
+- `routing.preference` cân bằng giữa chi phí và chất lượng: `cost-first`, `balanced` (mặc định) hoặc `quality-first`. Mỗi lần đổi mô hình, phiên hiển thị một ghi chú ngắn nêu mô hình, cấp và lý do (`routing.diagnostics`).
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  // Bất kỳ máy chủ tương thích OpenAI nào: llama.cpp, Ollama, vLLM, LM Studio, ...
+  "providers": {
+    "local": {
+      "package": "aisdk:@ai-sdk/openai-compatible",
+      "settings": { "baseURL": "http://127.0.0.1:8080/v1" },
+      "models": { "qwen3-coder": { "limit": { "context": 131072, "output": 8192 } } },
+    },
+  },
+  "qwen": { "base_url": "http://127.0.0.1:8080/v1", "model": "qwen3-coder", "provider": "local" },
+  "routing": {
+    "enabled": true,
+    "preference": "balanced",
+    // Tuỳ chọn. Các vai trò chưa đặt sẽ lấy từ danh mục.
+    "roles": { "local": "local/qwen3-coder", "routine": "deepseek/deepseek-chat", "pro": "deepseek/deepseek-reasoner" },
+    "step_routing": true,
+  },
+}
+```
+
+### Trình hướng dẫn thiết lập không gian làm việc
+
+Ứng dụng có thể thiết lập toàn bộ không gian làm việc của dự án giúp bạn: nó tạo ra các tài sản, kiểm chứng chúng, mở dự án và bắt đầu tác vụ đầu tiên trong một phiên. Hãy mở **New project workspace** từ trang chủ dự án (biểu tượng lưới ở thanh tiêu đề) hoặc từ bảng lệnh. Trình hướng dẫn hỏi mô tả dự án và thư mục đích, ngôn ngữ đầu ra, lựa chọn mô hình (định tuyến tự động ba mô hình hoặc một mô hình bị ghim kèm ưu tiên `cost-first`, `balanced`, `quality-first`), tuỳ chọn một mô hình cục bộ (URL cơ sở, ID mô hình, ID nhà cung cấp, khoá API tuỳ chọn, thời gian chờ và số token đầu ra tối đa) cùng một bước thử kết nối, và có bật tính nén sớm có cân nhắc chi phí hay không. Sau đó nó lần lượt chạy qua các giai đoạn hiển thị và để mở phiên chứa tác vụ ban đầu; một giai đoạn thất bại có thể được tiếp tục, còn một lượt chạy bị huỷ vẫn giữ các tệp đã tạo.
+
+Không có gì bí mật được ghi ra đĩa: khoá API cục bộ tuỳ chọn đi vào kho lưu thông tin xác thực và chỉ tên biến môi trường của nó có thể xuất hiện trong tệp `opencode.json` của dự án được tạo ra. Tệp này áp dụng các quyết định định tuyến và nén tương tự cho công việc sau đó trong dự án.
+
+### Tự động nén
+
+Các phiên dài được tóm tắt thành một mốc bền để cuộc hội thoại vẫn nằm trong cửa sổ của mô hình. Hai cơ chế kích hoạt độc lập dùng chung bộ máy này.
+
+**Nén theo giới hạn ngữ cảnh** bật mặc định (`compaction.auto`): nó chạy khi yêu cầu ước tính vượt quá trần của mô hình, giữ nguyên văn `compaction.keep.tokens` gần nhất (mặc định 15.000) và tóm tắt phần còn lại.
+
+**Nén sớm có cân nhắc chi phí** là tuỳ chọn (`compaction.early.enabled`) và tác động trước khi giới hạn hiện ra: nó chỉ chạy khi toàn bộ ngữ cảnh đạt ít nhất `min_tokens` (24.000) và phần có thể bỏ đi tự nó đáng giá ít nhất `min_benefit_tokens` (8.000) token, tối đa một lần mỗi `cooldown_seconds` (300) cho mỗi phiên. `require_task_boundary` khiến nó chờ một điểm ngắt tự nhiên; mặc định là `true`, nhưng một lượt gọi công cụ không bao giờ chạm tới điểm ngắt đó, nên `false` mới là giá trị khiến các lượt tác tử dài thực sự được nén. `local_summarize` gửi bản tóm tắt tới mô hình cục bộ đã cấu hình và ghi nhận mức sử dụng cùng chi phí của mô hình đó.
+
+```jsonc
+{
+  "compaction": {
+    "auto": true,
+    "keep": { "tokens": 15000 },
+    "early": { "enabled": true, "min_tokens": 24000, "min_benefit_tokens": 8000, "cooldown_seconds": 300, "require_task_boundary": false, "local_summarize": false },
+  },
+}
+```
+
+Một lượt nén cần chỗ đầu ra cho chính bản tóm tắt; một mô hình cục bộ với `limit.output` nhỏ có thể hết chỗ và thất bại với `Compaction summary reached the output token limit` — hãy nâng giới hạn đó hoặc để `local_summarize` tắt khi bạn gặp lỗi này.
+
 ### Cài đặt
 
 ```bash

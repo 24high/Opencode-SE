@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test"
+import { Agent } from "@opencode/core/agent"
+import { SessionMessage } from "@opencode/core/session/message"
 import { Model } from "@opencode/schema/model"
 import { Money } from "@opencode/schema/money"
-import { Option, Schema } from "effect"
+import { DateTime, Option, Schema } from "effect"
 import { Routing } from "@opencode/core/routing/service"
 import { RoutingPolicy } from "@opencode/core/routing/policy"
 import type { Candidate } from "@opencode/core/routing/policy"
@@ -258,6 +260,7 @@ test("routing settings decode with safe defaults and metadata overrides merge", 
     preference: "balanced",
     escalate_pinned: false,
     local_enabled: true,
+    step_routing: true,
     diagnostics: true,
     attempts: { local: 2, routine: 2 },
     roles: {},
@@ -294,6 +297,8 @@ test("session routing metadata overrides only the settings it names", () => {
   expect(merged.preference).toBe("quality-first")
   expect(merged.attempts).toEqual({ local: 3, routine: 4 })
   expect(merged.diagnostics).toBe(false)
+  expect(merged.step_routing).toBe(true)
+  expect(Routing.overrideSettings(base, { step_routing: false }).step_routing).toBe(false)
   expect(merged.roles.routine?.model).toEqual(Model.ID.make("deepseek-flash"))
 })
 
@@ -301,4 +306,98 @@ test("only an explicit session routing override outranks a pinned model", () => 
   expect(Routing.explicitRouting({ metadata: { "opencode.routing": { enabled: true } } })).toBe(true)
   expect(Routing.explicitRouting({ metadata: { "opencode.routing": { preference: "quality-first" } } })).toBe(false)
   expect(Routing.explicitRouting({})).toBe(false)
+})
+
+const CODE = "add a retry budget to the runner"
+
+const step = (input: Partial<RoutingPolicy.StepSignals>): RoutingPolicy.StepSignals => ({
+  previousFailures: 0,
+  failureStreak: 0,
+  executed: false,
+  ...input,
+})
+
+const stepRoute = (request: string, signals: Partial<RoutingPolicy.StepSignals>) =>
+  select({ candidates: pool(), evidence: RoutingPolicy.classifyStep(RoutingPolicy.classifyTask(request), step(signals)) })
+
+test("a coding turn that has only gathered information plans on the routine tier", () => {
+  const signals = step({})
+  expect(RoutingPolicy.classifyStep(RoutingPolicy.classifyTask(CODE), signals).task).toBe("analysis")
+  expect(stepRoute(CODE, signals)?.tier).toBe("routine")
+})
+
+test("the turn keeps executing on the local tier once it has changed files", () => {
+  const signals = step({ executed: true })
+  expect(RoutingPolicy.classifyStep(RoutingPolicy.classifyTask(CODE), signals).task).toBe("bounded-code")
+  expect(stepRoute(CODE, signals)?.tier).toBe("local")
+})
+
+test("one failed tool call repairs on the routine tier", () => {
+  const signals = step({ executed: true, previousFailures: 1, failureStreak: 1 })
+  expect(RoutingPolicy.classifyStep(RoutingPolicy.classifyTask(CODE), signals).task).toBe("debug")
+  expect(stepRoute(CODE, signals)?.tier).toBe("routine")
+})
+
+test("a second consecutive failing step escalates to pro", () => {
+  const signals = step({ executed: true, previousFailures: 2, failureStreak: 2 })
+  expect(RoutingPolicy.classifyStep(RoutingPolicy.classifyTask(CODE), signals).complexity).toBe("high")
+  expect(stepRoute(CODE, signals)?.tier).toBe("pro")
+})
+
+test("step classification leaves security and architecture work alone", () => {
+  const security = RoutingPolicy.classifyTask("fix the auth token injection vulnerability")
+  expect(RoutingPolicy.classifyStep(security, step({ previousFailures: 1, failureStreak: 2 }))).toEqual(security)
+  const architecture = RoutingPolicy.classifyTask("restructure the session runner into modules")
+  expect(RoutingPolicy.classifyStep(architecture, step({ executed: true }))).toEqual(architecture)
+})
+
+test("step signals describe only the current turn", () => {
+  const user = (id: string, text: string) =>
+    SessionMessage.User.make({ id: SessionMessage.ID.make(id), type: "user", text, time: { created: DateTime.makeUnsafe(0) } })
+  const assistant = (id: string, tools: ReadonlyArray<[name: string, failed?: boolean]>) =>
+    Schema.decodeUnknownSync(SessionMessage.Assistant)({
+      id: SessionMessage.ID.make(id),
+      type: "assistant",
+      agent: Agent.defaultID,
+      model: { id: "model", providerID: "test" },
+      content: tools.map(([name, failed], index) => ({
+        type: "tool" as const,
+        id: `call_${index}_${name}`,
+        name,
+        state: failed
+          ? { status: "error" as const, input: {}, error: { type: "tool.input-incomplete", message: "tool call incomplete" } }
+          : { status: "completed" as const, input: {}, content: [{ type: "text" as const, text: "ok" }] },
+        time: { created: 0 },
+      })),
+      finish: "tool-calls",
+      time: { created: 0, completed: 0 },
+    })
+
+  // The earlier turn's edit is not part of this turn, and the synthetic routing
+  // note is not a step.
+  const failing: SessionMessage.Info[] = [
+    user("msg_user_1", "add the retry budget"),
+    assistant("msg_assistant_1", [["edit"]]),
+    user("msg_user_2", "now cover the interrupted case"),
+    SessionMessage.Synthetic.make({
+      id: SessionMessage.ID.make("msg_synth_1"),
+      type: "synthetic",
+      text: "Routing: local (qwen)",
+      time: { created: DateTime.makeUnsafe(0) },
+    }),
+    assistant("msg_assistant_2", [["read", true]]),
+    assistant("msg_assistant_3", [["read", true]]),
+  ]
+  const failingSignals = Routing.stepSignals(failing)
+  expect(failingSignals).toEqual({ previousFailures: 1, failureStreak: 2, executed: false })
+  expect(stepRoute(CODE, failingSignals)?.tier).toBe("pro")
+
+  const executing: SessionMessage.Info[] = [
+    user("msg_user_3", "add the retry budget"),
+    assistant("msg_assistant_4", [["read"]]),
+    assistant("msg_assistant_5", [["edit"]]),
+  ]
+  const executingSignals = Routing.stepSignals(executing)
+  expect(executingSignals).toEqual({ previousFailures: 0, failureStreak: 0, executed: true })
+  expect(stepRoute(CODE, executingSignals)?.tier).toBe("local")
 })

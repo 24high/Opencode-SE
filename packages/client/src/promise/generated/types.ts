@@ -2310,6 +2310,7 @@ export type ConfigEntry =
             routine?: number | "Infinity" | "-Infinity" | "NaN"
           }
           local_enabled?: boolean
+          step_routing?: boolean
           diagnostics?: boolean
         }
         skills?: Array<string>

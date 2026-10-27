@@ -43,6 +43,71 @@
 
 ---
 
+### Automatisk modellruting
+
+OpenCode kan velge en modell for hvert trinn i stedet for å beholde én modell hele sesjonen: en lokal eller billig modell gjør rutinearbeidet, og den sterkeste modellen reserveres til delene som virkelig trenger den. Ruting er slått av til du slår på `routing.enabled`.
+
+Velg **Auto (Routing)** i modellvelgeren for å route en sesjon automatisk. Velger du en bestemt modell, låses sesjonen til den, og rutingen blander seg ikke borti.
+
+| Nivå    | Standard                             | Dekker                                                                           |
+| ------- | ------------------------------------ | ------------------------------------------------------------------------------- |
+| Local   | modellen i `qwen`-konfigurasjonen din | implementering, tester, refaktorering og build- og shell-trinnene som verifiserer dem |
+| Routine | den billigste aktive DeepSeek Flash-modellen | planlegging, analyse, gjennomgang, forklaringer og vanlig feilsøking |
+| Pro     | den sterkeste aktive DeepSeek-modellen | arkitektur og store refaktureringer, vanskelig feilsøking, sikkerhetskritisk arbeid |
+
+- Den siste forespørselen din setter grunnklassifiseringen, og hvert trinn i turen blir klassifisert på nytt ut fra hva turen allerede har gjort: trinn som bare leser og søker, blir på Routine-nivået. Når ett trinn har endret filer eller kjørt en kommando, fortsetter resten av turen på Local-nivået. To etterfølgende trinn med mislykkede tool-kall teller som vanskelig feilsøking og går til Pro-nivået. Med `routing.step_routing: false` beholder en tur ett nivå.
+- Et nivå brukes bare hvis modellen er aktivert og frisk, og hvis samtalen fortsatt får plass i kontekstvinduet hennes.
+- Etter `routing.attempts` feil eskaleres arbeidet til neste nivå, og den feilende modellen hoppes over i en kort nedkjølingsperiode. Å avbryte en kjøring teller aldri som en modellfeil.
+- `routing.preference` veier kostnad mot kvalitet: `cost-first`, `balanced` (standard) eller `quality-first`. Hver gang modellen byttes, viser sesjonen en kort notis med modellen, nivået og hvorfor (`routing.diagnostics`).
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  // Alle OpenAI-kompatible tjenere: llama.cpp, Ollama, vLLM, LM Studio, ...
+  "providers": {
+    "local": {
+      "package": "aisdk:@ai-sdk/openai-compatible",
+      "settings": { "baseURL": "http://127.0.0.1:8080/v1" },
+      "models": { "qwen3-coder": { "limit": { "context": 131072, "output": 8192 } } },
+    },
+  },
+  "qwen": { "base_url": "http://127.0.0.1:8080/v1", "model": "qwen3-coder", "provider": "local" },
+  "routing": {
+    "enabled": true,
+    "preference": "balanced",
+    // Valgfritt. Roller som ikke er satt, hentes fra katalogen.
+    "roles": { "local": "local/qwen3-coder", "routine": "deepseek/deepseek-chat", "pro": "deepseek/deepseek-reasoner" },
+    "step_routing": true,
+  },
+}
+```
+
+### Veiviser for oppsett av arbeidsområde
+
+Appen kan sette opp et helt prosjektarbeidsområde for deg: den genererer artefaktene, verifiserer dem, åpner prosjektet og starter den første oppgaven i en sesjon. Åpne **Nytt prosjektarbeidsområde** fra prosjektforsiden (ruteikonet i topplinjen) eller fra kommandopaletten. Veiviseren spør etter prosjektbeskrivelse og målmappe, et outputspråk, modellvalg (automatisk ruting med tre modeller eller en låst modell med preferanse `cost-first`, `balanced`, `quality-first`), eventuelt en lokal modell (base-URL, modell-ID, leverandør-ID, valgfri API-nøkkel, tidsavbrudd og maks antall output-token) med en tilkoblingstest, og om tidlig kostnadsbevisst komprimering skal slås på. Deretter går den gjennom synlige faser og lar sesjonen med den første oppgaven stå åpen; en mislykket fase kan gjenopptas, og en avbrutt kjøring beholder filene som allerede er opprettet.
+
+Det skrives ingen hemmeligheter til disk: den eventuelle lokale API-nøkkelen legges i credential-lageret, og bare navnet på miljøvariabelen hennes kan dukke opp i den genererte `opencode.json` for prosjektet, som bruker de samme ruting- og komprimeringsvedtakene for senere arbeid i prosjektet.
+
+### Automatisk komprimering
+
+Lange sesjoner oppsummeres til et holdbart kontrollpunkt, slik at samtalen fortsatt får plass i modellens vindu. To uavhengige utløsere deler den mekanismen.
+
+**Komprimering ved kontekstgrensen** er slått på som standard (`compaction.auto`): den kjøres når det estimerte requestet går over taket til modellen, beholder de siste `compaction.keep.tokens` (15 000 som standard) ordrett og oppsummerer resten.
+
+**Tidlig kostnadsbevisst komprimering** er valgfritt (`compaction.early.enabled`) og griper inn før grensen er i sikte: den kjøres bare når hele konteksten er på minst `min_tokens` (24 000), og bare når delen som kan fjernes alene er verdt minst `min_benefit_tokens` (8 000) token, høyst én gang hver `cooldown_seconds` (300) per sesjon. `require_task_boundary` får den til å vente på en naturlig pause; standarden er `true`, men én tur med tool-kall når aldri en slik pause, så `false` er det som gjør at lange agentiske turer komprimeres i det hele tatt. `local_summarize` sender selve oppsummeringen til den lokale modellen og registrerer forbruket og kostnaden til den modellen.
+
+```jsonc
+{
+  "compaction": {
+    "auto": true,
+    "keep": { "tokens": 15000 },
+    "early": { "enabled": true, "min_tokens": 24000, "min_benefit_tokens": 8000, "cooldown_seconds": 300, "require_task_boundary": false, "local_summarize": false },
+  },
+}
+```
+
+En komprimeringskjøring trenger utdataplass til sin egen oppsummering; en lokal modell med lite `limit.output` kan gå tom og feile med `Compaction summary reached the output token limit` – skru opp grensen eller la `local_summarize` være slått av når du ser dette.
+
 ### Installasjon
 
 ```bash

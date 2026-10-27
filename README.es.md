@@ -43,6 +43,71 @@
 
 ---
 
+### Enrutado automático de modelos
+
+OpenCode puede elegir un modelo para cada paso en lugar de mantener el mismo durante toda la sesión: un modelo local o económico hace el trabajo rutinario y el modelo más potente se reserva para las partes que de verdad lo necesitan. El enrutado permanece apagado hasta que actives `routing.enabled`.
+
+Elige **Auto (Routing)** en el selector de modelos para enrutar una sesión automáticamente. Si eliges un modelo concreto, la sesión queda fijada a él y el enrutado no lo toca.
+
+| Nivel   | Valor predeterminado                 | Se encarga de                                                                   |
+| ------- | ------------------------------------ | ------------------------------------------------------------------------------- |
+| Local   | el modelo de tu configuración `qwen` | implementación, pruebas, refactorizaciones y los pasos de compilación y consola que las verifican |
+| Routine | el modelo DeepSeek Flash activo más barato | planificación, análisis, revisión, explicaciones y depuración habitual  |
+| Pro     | el modelo DeepSeek activo más potente | arquitectura y refactorizaciones grandes, depuración difícil, trabajo sensible a la seguridad |
+
+- Tu última petición define la clasificación base y después cada paso del turno se reclasifica según lo que el turno ya ha hecho: los pasos que solo leen y buscan se quedan en el nivel Routine. En cuanto un paso modifica archivos o ejecuta un comando, el resto del turno sigue ejecutando en el nivel Local. Dos pasos consecutivos con llamadas a herramientas fallidas se consideran depuración difícil y pasan al nivel Pro. Con `routing.step_routing: false` el turno se queda en un solo nivel.
+- Un nivel solo se usa si su modelo está activado y sano, y si la conversación todavía cabe en su ventana de contexto.
+- Tras `routing.attempts` fallos, el trabajo escala al siguiente nivel y el modelo que falla se omite durante una breve pausa de enfriamiento. Interrumpir una ejecución nunca cuenta como fallo del modelo.
+- `routing.preference` equilibra coste y calidad: `cost-first`, `balanced` (predeterminado) o `quality-first`. Cada cambio de modelo muestra una nota con el modelo, su nivel y el motivo (`routing.diagnostics`).
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  // Cualquier servidor compatible con OpenAI: llama.cpp, Ollama, vLLM, LM Studio, ...
+  "providers": {
+    "local": {
+      "package": "aisdk:@ai-sdk/openai-compatible",
+      "settings": { "baseURL": "http://127.0.0.1:8080/v1" },
+      "models": { "qwen3-coder": { "limit": { "context": 131072, "output": 8192 } } },
+    },
+  },
+  "qwen": { "base_url": "http://127.0.0.1:8080/v1", "model": "qwen3-coder", "provider": "local" },
+  "routing": {
+    "enabled": true,
+    "preference": "balanced",
+    // Opcional. Los roles sin definir se obtienen del catálogo.
+    "roles": { "local": "local/qwen3-coder", "routine": "deepseek/deepseek-chat", "pro": "deepseek/deepseek-reasoner" },
+    "step_routing": true,
+  },
+}
+```
+
+### Asistente de configuración del espacio de trabajo
+
+La aplicación puede preparar por ti todo el espacio de trabajo de un proyecto: genera los artefactos, los verifica, abre el proyecto y arranca la primera tarea en una sesión. Abre **Nuevo espacio de trabajo de proyecto** desde la pantalla de proyectos (el icono de rejilla de la cabecera) o desde la paleta de comandos. El asistente pregunta por la descripción y el directorio del proyecto, el idioma de salida, la selección de modelo (enrutado automático de tres modelos o un modelo fijo con preferencia `cost-first`, `balanced`, `quality-first`), de forma opcional un modelo local (URL base, ID del modelo, ID del proveedor, clave de API opcional, tiempo de espera y tokens máximos de salida) con una prueba de conexión, y si se activa la compactación anticipada consciente del coste. Después recorre etapas visibles y deja abierta la sesión inicial ya creada; una etapa fallida puede reanudarse y una ejecución cancelada conserva los archivos ya creados.
+
+No se escribe nada secreto en disco: la clave de API local opcional va al almacén de credenciales y en el `opencode.json` del proyecto solo puede aparecer el nombre de su variable de entorno. Ese archivo aplica las mismas decisiones de enrutado y compactación al trabajo posterior en el proyecto.
+
+### Compactación automática
+
+Las sesiones largas se resumen en un punto de control persistente para que la conversación siga cabiendo en la ventana del modelo. Dos disparadores independientes comparten ese mecanismo.
+
+**La compactación por límite de contexto** está activada de forma predeterminada (`compaction.auto`): se ejecuta cuando la petición estimada supera el techo del modelo, conserva literalmente los últimos `compaction.keep.tokens` (15.000 de forma predeterminada) y resume el resto.
+
+**La compactación anticipada consciente del coste** es opcional (`compaction.early.enabled`) y actúa antes de tener el límite a la vista: solo se ejecuta si todo el contexto suma al menos `min_tokens` (24.000) y la parte eliminable aporta al menos `min_benefit_tokens` (8.000) tokens, como máximo una vez cada `cooldown_seconds` (300) por sesión. `require_task_boundary` la hace esperar a un descanso natural; su valor predeterminado es `true`, pero un turno de llamadas a herramientas nunca alcanza ese descanso, así que `false` es lo que permite compactar los turnos agénticos largos. `local_summarize` envía el resumen al modelo local configurado y registra su uso y coste.
+
+```jsonc
+{
+  "compaction": {
+    "auto": true,
+    "keep": { "tokens": 15000 },
+    "early": { "enabled": true, "min_tokens": 24000, "min_benefit_tokens": 8000, "cooldown_seconds": 300, "require_task_boundary": false, "local_summarize": false },
+  },
+}
+```
+
+Una ejecución de compactación necesita espacio de salida para su propio resumen; un modelo local con un `limit.output` pequeño puede fallar con `Compaction summary reached the output token limit`. En ese caso sube ese límite o deja `local_summarize` desactivado.
+
 ### Instalación
 
 ```bash

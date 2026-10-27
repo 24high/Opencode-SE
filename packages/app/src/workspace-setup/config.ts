@@ -83,7 +83,9 @@ export const buildConfigBlock = (input: SetupSettings): string => {
         min_tokens: 24000,
         min_benefit_tokens: 8000,
         cooldown_seconds: 300,
-        require_task_boundary: true,
+        // Mid-task compaction is what keeps long agentic turns alive; waiting
+        // for a task boundary means a single tool-heavy turn can never compact.
+        require_task_boundary: false,
         local_summarize: input.qwenEnabled,
       },
     }

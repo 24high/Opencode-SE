@@ -43,6 +43,71 @@
 
 ---
 
+### Instradamento automatico dei modelli
+
+OpenCode può scegliere un modello per ogni passo invece di tenere lo stesso modello per tutta la sessione: un modello locale o economico svolge il lavoro ordinario e il modello più potente resta riservato alle parti che ne hanno davvero bisogno. L'instradamento rimane spento finché non attivi `routing.enabled`.
+
+Scegli **Auto (Routing)** nel selettore dei modelli per instradare una sessione in modo automatico. Se scegli un modello specifico, la sessione resta vincolata a quel modello e l'instradamento non la tocca.
+
+| Livello | Predefinito                          | Si occupa di                                                                    |
+| ------- | ------------------------------------ | ------------------------------------------------------------------------------- |
+| Local   | il modello nella tua configurazione `qwen` | implementazione, test, refactoring e i passi di build e shell che li verificano |
+| Routine | il modello DeepSeek Flash attivo più economico | pianificazione, analisi, revisione, spiegazioni e debugging ordinario |
+| Pro     | il modello DeepSeek attivo più potente | architettura e grandi refactoring, debugging difficile, lavoro sensibile alla sicurezza |
+
+- La tua ultima richiesta stabilisce la classificazione di base, poi ogni passo del turno viene riclassificato in base a ciò che il turno ha già fatto: i passi che si limitano a leggere e cercare restano sul livello Routine. Non appena un passo ha modificato file o eseguito un comando, il resto del turno continua a essere eseguito sul livello Local. Due passi consecutivi con chiamate a strumenti fallite contano come debugging difficile e passano al livello Pro. Con `routing.step_routing: false` il turno mantiene un solo livello.
+- Un livello viene usato solo se il suo modello è abilitato e attualmente sano, e se la conversazione sta ancora nella sua finestra di contesto.
+- Dopo `routing.attempts` fallimenti il lavoro passa al livello successivo e il modello che fallisce viene saltato per un breve periodo di raffreddamento. Interrompere un'esecuzione non conta mai come fallimento del modello.
+- `routing.preference` bilancia costo e qualità: `cost-first`, `balanced` (predefinito) o `quality-first`. Ogni cambio di modello mostra una nota con il modello, il livello e il motivo (`routing.diagnostics`).
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  // Qualsiasi server compatibile OpenAI: llama.cpp, Ollama, vLLM, LM Studio, ...
+  "providers": {
+    "local": {
+      "package": "aisdk:@ai-sdk/openai-compatible",
+      "settings": { "baseURL": "http://127.0.0.1:8080/v1" },
+      "models": { "qwen3-coder": { "limit": { "context": 131072, "output": 8192 } } },
+    },
+  },
+  "qwen": { "base_url": "http://127.0.0.1:8080/v1", "model": "qwen3-coder", "provider": "local" },
+  "routing": {
+    "enabled": true,
+    "preference": "balanced",
+    // Facoltativo. I ruoli non impostati vengono individuati dal catalogo.
+    "roles": { "local": "local/qwen3-coder", "routine": "deepseek/deepseek-chat", "pro": "deepseek/deepseek-reasoner" },
+    "step_routing": true,
+  },
+}
+```
+
+### Procedura guidata di configurazione dell'area di lavoro
+
+L'app può preparare un'intera area di lavoro per il progetto: genera gli artefatti, li verifica, apre il progetto e avvia la prima attività in una sessione. Apri **Nuova area di lavoro del progetto** dalla home dei progetti (l'icona a griglia nell'intestazione) o dalla palette dei comandi. La procedura guidata chiede la descrizione del progetto e la directory di destinazione, una lingua di output, la selezione del modello (instradamento automatico a tre modelli oppure un modello fisso con preferenza `cost-first`, `balanced`, `quality-first`), facoltativamente un modello locale (URL di base, ID modello, ID provider, chiave API facoltativa, timeout, token di output massimi) con un test di connessione, e se abilitare il compattamento anticipato attento ai costi. Successivamente attraversa fasi visibili e lascia aperta la sessione con l'attività iniziale; una fase fallita può essere ripresa e un'esecuzione annullata conserva i file già creati.
+
+Sul disco non viene scritto nulla di riservato: la chiave API locale facoltativa finisce nell'archivio delle credenziali e nel file `opencode.json` del progetto può comparire solo il nome della sua variabile d'ambiente. Quel file applica le stesse decisioni di instradamento e compattamento al lavoro successivo nel progetto.
+
+### Compattamento automatico
+
+Le sessioni lunghe vengono riassunte in un punto di controllo persistente, così la conversazione continua a stare nella finestra del modello. Due meccanismi indipendenti condividono questa macchina.
+
+**Il compattamento per limite di contesto** è attivo per impostazione predefinita (`compaction.auto`): viene eseguito quando la richiesta stimata supera il tetto del modello, conserva alla lettera gli ultimi `compaction.keep.tokens` (15.000 predefiniti) e riassume il resto.
+
+**Il compattamento anticipato attento ai costi** è opzionale (`compaction.early.enabled`) e agisce prima che il limite sia in vista: viene eseguito solo se l'intero contesto raggiunge almeno `min_tokens` (24.000) e la parte rimuovibile vale almeno `min_benefit_tokens` (8.000) token, al più una volta ogni `cooldown_seconds` (300) per sessione. `require_task_boundary` lo fa attendere una pausa naturale; il valore predefinito è `true`, ma un turno di chiamate a strumenti non raggiunge mai una pausa del genere, quindi `false` è ciò che rende possibile compattare i lunghi turni agentici. `local_summarize` invia il riassunto al modello locale configurato e registra il suo utilizzo e il suo costo.
+
+```jsonc
+{
+  "compaction": {
+    "auto": true,
+    "keep": { "tokens": 15000 },
+    "early": { "enabled": true, "min_tokens": 24000, "min_benefit_tokens": 8000, "cooldown_seconds": 300, "require_task_boundary": false, "local_summarize": false },
+  },
+}
+```
+
+Un'esecuzione di compattamento ha bisogno di spazio di output per il proprio riassunto; un modello locale con un `limit.output` piccolo può fallire con `Compaction summary reached the output token limit`. In quel caso aumenta quel limite o lascia `local_summarize` disattivato.
+
 ### Installazione
 
 ```bash
